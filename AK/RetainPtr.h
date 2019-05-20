@@ -14,6 +14,7 @@ public:
     RetainPtr(const T* ptr) : m_ptr(const_cast<T*>(ptr)) { retain_if_not_null(m_ptr); }
     RetainPtr(T* ptr) : m_ptr(ptr) { retain_if_not_null(m_ptr); }
     RetainPtr(T& object) : m_ptr(&object) { m_ptr->retain(); }
+    RetainPtr(const T& object) : m_ptr(const_cast<T*>(&object)) { m_ptr->retain(); }
     RetainPtr(AdoptTag, T& object) : m_ptr(&object) { }
     RetainPtr(RetainPtr& other) : m_ptr(other.copy_ref().leak_ref()) { }
     RetainPtr(RetainPtr&& other) : m_ptr(other.leak_ref()) { }
@@ -49,6 +50,14 @@ public:
             release_if_not_null(m_ptr);
             m_ptr = other.leak_ref();
         }
+        return *this;
+    }
+
+    template<typename U>
+    RetainPtr& operator=(Retained<U>&& other)
+    {
+        release_if_not_null(m_ptr);
+        m_ptr = &other.leak_ref();
         return *this;
     }
 
@@ -89,9 +98,6 @@ public:
 
     bool operator!() const { return !m_ptr; }
 
-    typedef T* RetainPtr::*UnspecifiedBoolType;
-    operator UnspecifiedBoolType() const { return m_ptr ? &RetainPtr::m_ptr : nullptr; }
-
     T* leak_ref()
     {
         T* leakedPtr = m_ptr;
@@ -108,7 +114,25 @@ public:
     T& operator*() { return *m_ptr; }
     const T& operator*() const { return *m_ptr; }
 
+    operator const T*() const { return m_ptr; }
+    operator T*() { return m_ptr; }
+
     operator bool() { return !!m_ptr; }
+
+    bool operator==(std::nullptr_t) const { return !m_ptr; }
+    bool operator!=(std::nullptr_t) const { return m_ptr; }
+
+    bool operator==(const RetainPtr& other) const { return m_ptr == other.m_ptr; }
+    bool operator!=(const RetainPtr& other) const { return m_ptr != other.m_ptr; }
+
+    bool operator==(RetainPtr& other) { return m_ptr == other.m_ptr; }
+    bool operator!=(RetainPtr& other) { return m_ptr != other.m_ptr; }
+
+    bool operator==(const T* other) const { return m_ptr == other; }
+    bool operator!=(const T* other) const { return m_ptr != other; }
+
+    bool operator==(T* other) { return m_ptr == other; }
+    bool operator!=(T* other) { return m_ptr != other; }
 
     bool is_null() const { return !m_ptr; }
 

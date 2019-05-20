@@ -1,5 +1,7 @@
 #pragma once
 
+#include <AK/Types.h>
+
 #define WNOHANG 1
 
 #define R_OK 4
@@ -222,6 +224,7 @@ typedef dword uid_t;
 typedef dword gid_t;
 typedef dword clock_t;
 typedef dword socklen_t;
+typedef int pid_t;
 
 struct tms {
     clock_t tms_utime;
@@ -243,7 +246,6 @@ struct sigaction {
     };
     sigset_t sa_mask;
     int sa_flags;
-    void (*sa_restorer)(void);
 };
 
 #define SA_NOCLDSTOP 1
@@ -255,7 +257,8 @@ struct sigaction {
 #define SIG_UNBLOCK 1
 #define SIG_SETMASK 2
 
-// FIXME: Support 64-bit offsets!
+#define OFF_T_MAX 2147483647
+
 typedef signed_dword off_t;
 typedef dword time_t;
 
@@ -326,6 +329,8 @@ struct pollfd {
 #define SOCK_NONBLOCK 04000
 #define SOCK_CLOEXEC 02000000
 
+#define MSG_DONTWAIT 0x40
+
 #define SOL_SOCKET 1
 
 #define SO_RCVTIMEO 1
@@ -357,4 +362,38 @@ struct sockaddr_in {
     uint16_t sin_port;
     struct in_addr sin_addr;
     char sin_zero[8];
+};
+
+typedef dword __u32;
+typedef word __u16;
+typedef byte __u8;
+typedef int __s32;
+typedef short __s16;
+
+typedef dword useconds_t;
+typedef signed_dword suseconds_t;
+
+struct timeval {
+    time_t tv_sec;
+    suseconds_t tv_usec;
+};
+
+#define UTSNAME_ENTRY_LEN 65
+
+struct utsname {
+    char sysname[UTSNAME_ENTRY_LEN];
+    char nodename[UTSNAME_ENTRY_LEN];
+    char release[UTSNAME_ENTRY_LEN];
+    char version[UTSNAME_ENTRY_LEN];
+    char machine[UTSNAME_ENTRY_LEN];
+};
+
+struct [[gnu::packed]] FarPtr {
+    dword offset { 0 };
+    word selector { 0 };
+};
+
+struct iovec {
+    void* iov_base;
+    size_t iov_len;
 };

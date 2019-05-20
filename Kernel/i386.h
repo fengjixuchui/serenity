@@ -1,10 +1,30 @@
 #pragma once
 
-#include "types.h"
-#include "kprintf.h"
+#include <Kernel/kstdio.h>
+#include <Kernel/LinearAddress.h>
 
 #define PAGE_SIZE 4096
 #define PAGE_MASK 0xfffff000
+
+struct [[gnu::packed]] TSS32 {
+    word backlink, __blh;
+    dword esp0;
+    word ss0, __ss0h;
+    dword esp1;
+    word ss1, __ss1h;
+    dword esp2;
+    word ss2, __ss2h;
+    dword cr3, eip, eflags;
+    dword eax,ecx,edx,ebx,esp,ebp,esi,edi;
+    word es, __esh;
+    word cs, __csh;
+    word ss, __ssh;
+    word ds, __dsh;
+    word fs, __fsh;
+    word gs, __gsh;
+    word ldt, __ldth;
+    word trace, iomapbase;
+};
 
 union [[gnu::packed]] Descriptor {
     struct {
@@ -61,6 +81,7 @@ class IRQHandler;
 
 void gdt_init();
 void idt_init();
+void sse_init();
 void register_interrupt_handler(byte number, void (*f)());
 void register_user_callable_interrupt_handler(byte number, void (*f)());
 void register_irq_handler(byte number, IRQHandler&);
@@ -233,15 +254,8 @@ struct [[gnu::packed]] RegisterDumpWithExceptionCode {
     word ss_if_crossRing;
 };
 
-struct FPUState {
-    dword cwd;
-    dword swd;
-    dword twd;
-    dword fip;
-    dword fcs;
-    dword foo;
-    dword fos;
-    dword st[20];
+struct [[gnu::aligned(16)]] FPUState {
+    byte buffer[512];
 };
 
 inline constexpr dword page_base_of(dword address)
@@ -288,7 +302,7 @@ public:
         SplitQword end;
         read_tsc(end.lsw, end.msw);
         uint64_t diff = end.qw - m_start.qw;
-        dbgprintf("Stopwatch(%s): %q ticks\n", m_name, diff);
+        dbgprintf("Stopwatch(%s): %Q ticks\n", m_name, diff);
     }
 
 private:

@@ -4,6 +4,7 @@
 #include <AK/Badge.h>
 #include <AK/Function.h>
 #include <AK/HashTable.h>
+#include <AK/Retainable.h>
 #include <LibGUI/GModelIndex.h>
 #include <LibGUI/GVariant.h>
 #include <SharedGraphics/TextAlignment.h>
@@ -46,14 +47,18 @@ public:
 
     virtual ~GModel();
 
-    virtual int row_count() const = 0;
-    virtual int column_count() const = 0;
+    virtual int row_count(const GModelIndex& = GModelIndex()) const = 0;
+    virtual int column_count(const GModelIndex& = GModelIndex()) const = 0;
     virtual String row_name(int) const { return { }; }
     virtual String column_name(int) const { return { }; }
     virtual ColumnMetadata column_metadata(int) const { return { }; }
     virtual GVariant data(const GModelIndex&, Role = Role::Display) const = 0;
     virtual void update() = 0;
-    virtual void activate(const GModelIndex&) { }
+    virtual GModelIndex parent_index(const GModelIndex&) const { return { }; }
+    virtual GModelIndex index(int row, int column = 0, const GModelIndex& = GModelIndex()) const { return create_index(row, column); }
+    virtual GModelIndex sibling(int row, int column, const GModelIndex& parent) const;
+    virtual bool is_editable(const GModelIndex&) const { return false; }
+    virtual void set_data(const GModelIndex&, const GVariant&) { }
 
     bool is_valid(const GModelIndex& index) const
     {
@@ -62,9 +67,6 @@ public:
 
     void set_selected_index(const GModelIndex&);
     GModelIndex selected_index() const { return m_selected_index; }
-
-    bool activates_on_selection() const { return m_activates_on_selection; }
-    void set_activates_on_selection(bool b) { m_activates_on_selection = b; }
 
     virtual int key_column() const { return -1; }
     virtual GSortOrder sort_order() const { return GSortOrder::None; }
@@ -82,8 +84,14 @@ protected:
     void for_each_view(Function<void(GAbstractView&)>);
     void did_update();
 
+    GModelIndex create_index(int row, int column, void* data = nullptr) const;
+
 private:
     HashTable<GAbstractView*> m_views;
     GModelIndex m_selected_index;
-    bool m_activates_on_selection { false };
 };
+
+inline GModelIndex GModelIndex::parent() const
+{
+    return m_model ? m_model->parent_index(*this) : GModelIndex();
+}

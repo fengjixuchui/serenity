@@ -1,17 +1,27 @@
 #include <LibGUI/GDesktop.h>
 #include <LibGUI/GEventLoop.h>
 #include <string.h>
+#include <unistd.h>
 
 GDesktop& GDesktop::the()
 {
-    static GDesktop* s_the;
-    if (!s_the)
-        s_the = new GDesktop;
-    return *s_the;
+    static GDesktop* the;
+    if (!the)
+        the = new GDesktop;
+    return *the;
 }
 
 GDesktop::GDesktop()
 {
+}
+
+void GDesktop::did_receive_screen_rect(Badge<GEventLoop>, const Rect& rect)
+{
+    if (m_rect == rect)
+        return;
+    m_rect = rect;
+    if (on_rect_change)
+        on_rect_change(rect);
 }
 
 bool GDesktop::set_wallpaper(const String& path)

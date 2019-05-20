@@ -3,6 +3,7 @@
 #include "Syscall.h"
 #include "Console.h"
 #include "Scheduler.h"
+#include <Kernel/ProcessTracer.h>
 
 extern "C" void syscall_trap_entry(RegisterDump&);
 extern "C" void syscall_trap_handler();
@@ -52,10 +53,15 @@ int sync()
 
 static dword handle(RegisterDump& regs, dword function, dword arg1, dword arg2, dword arg3)
 {
+    current->process().did_syscall();
+
     ASSERT_INTERRUPTS_ENABLED();
     switch (function) {
     case Syscall::SC_yield:
         Scheduler::yield();
+        break;
+    case Syscall::SC_beep:
+        Scheduler::beep();
         break;
     case Syscall::SC_donate:
         return current->process().sys$donate((int)arg1);
@@ -112,9 +118,18 @@ static dword handle(RegisterDump& regs, dword function, dword arg1, dword arg2, 
         return current->process().sys$gethostname((char*)arg1, (size_t)arg2);
     case Syscall::SC_exit:
         cli();
+        if (auto* tracer = current->process().tracer())
+            tracer->did_syscall(function, arg1, arg2, arg3, 0);
         current->process().sys$exit((int)arg1);
         ASSERT_NOT_REACHED();
         return 0;
+    case Syscall::SC_exit_thread:
+        cli();
+        if (auto* tracer = current->process().tracer())
+            tracer->did_syscall(function, arg1, arg2, arg3, 0);
+        current->process().sys$exit_thread((int)arg1);
+        ASSERT_NOT_REACHED();
+        break;
     case Syscall::SC_chdir:
         return current->process().sys$chdir((const char*)arg1);
     case Syscall::SC_uname:
@@ -162,6 +177,8 @@ static dword handle(RegisterDump& regs, dword function, dword arg1, dword arg2, 
     case Syscall::SC_setgroups:
         return current->process().sys$setgroups((ssize_t)arg1, (const gid_t*)arg2);
     case Syscall::SC_sigreturn:
+        if (auto* tracer = current->process().tracer())
+            tracer->did_syscall(function, arg1, arg2, arg3, 0);
         current->process().sys$sigreturn();
         ASSERT_NOT_REACHED();
         return 0;
@@ -241,6 +258,22 @@ static dword handle(RegisterDump& regs, dword function, dword arg1, dword arg2, 
         return current->process().sys$setsockopt((const SC_setsockopt_params*)arg1);
     case Syscall::SC_create_thread:
         return current->process().sys$create_thread((int(*)(void*))arg1, (void*)arg2);
+    case Syscall::SC_rename:
+        return current->process().sys$rename((const char*)arg1, (const char*)arg2);
+    case Syscall::SC_shm_open:
+        return current->process().sys$shm_open((const char*)arg1, (int)arg2, (mode_t)arg3);
+    case Syscall::SC_shm_close:
+        return current->process().sys$shm_unlink((const char*)arg1);
+    case Syscall::SC_ftruncate:
+        return current->process().sys$ftruncate((int)arg1, (off_t)arg2);
+    case Syscall::SC_systrace:
+        return current->process().sys$systrace((pid_t)arg1);
+    case Syscall::SC_mknod:
+        return current->process().sys$mknod((const char*)arg1, (mode_t)arg2, (dev_t)arg3);
+    case Syscall::SC_writev:
+        return current->process().sys$writev((int)arg1, (const struct iovec*)arg2, (int)arg3);
+    case Syscall::SC_getsockname:
+        return current->process().sys$getsockname((int)arg1, (sockaddr*)arg2, (socklen_t*)arg3);
     default:
         kprintf("<%u> int0x82: Unknown function %u requested {%x, %x, %x}\n", current->process().pid(), function, arg1, arg2, arg3);
         break;
@@ -252,10 +285,14 @@ static dword handle(RegisterDump& regs, dword function, dword arg1, dword arg2, 
 
 void syscall_trap_entry(RegisterDump& regs)
 {
+    current->process().big_lock().lock();
     dword function = regs.eax;
     dword arg1 = regs.edx;
     dword arg2 = regs.ecx;
     dword arg3 = regs.ebx;
     regs.eax = Syscall::handle(regs, function, arg1, arg2, arg3);
+    if (auto* tracer = current->process().tracer())
+        tracer->did_syscall(function, arg1, arg2, arg3, regs.eax);
+    current->process().big_lock().unlock();
 }
 

@@ -17,6 +17,7 @@ public:
         White,
         Red,
         Green,
+        Cyan,
         Blue,
         Yellow,
         Magenta,
@@ -70,6 +71,22 @@ public:
         byte b = (blue() * alpha() * (255 - source.alpha()) + 255 * source.alpha() * source.blue()) / d;
         byte a = d / 255;
         return Color(r, g, b, a);
+    }
+
+    Color to_grayscale() const
+    {
+        int gray = (red() + green() + blue()) / 3;
+        return Color(gray, gray, gray, alpha());
+    }
+
+    Color darkened() const
+    {
+        return Color(red() * 0.8, green() * 0.8, blue() * 0.8, alpha());
+    }
+
+    Color lightened() const
+    {
+        return Color(min(255.0, red() * 1.2), min(255.0, green() * 1.2), min(255.0, blue() * 1.2), alpha());
     }
 
     RGBA32 value() const { return m_value; }

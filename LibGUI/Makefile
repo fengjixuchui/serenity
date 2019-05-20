@@ -1,5 +1,8 @@
+include ../Makefile.common
+
 SHAREDGRAPHICS_OBJS = \
     ../SharedGraphics/Painter.o \
+    ../SharedGraphics/StylePainter.o \
     ../SharedGraphics/Font.o \
     ../SharedGraphics/Rect.o \
     ../SharedGraphics/GraphicsBitmap.o \
@@ -8,20 +11,15 @@ SHAREDGRAPHICS_OBJS = \
     ../SharedGraphics/PNGLoader.o
 
 LIBGUI_OBJS = \
-    GIODevice.o \
-    GFile.o \
+    GPainter.o \
     GButton.o \
     GCheckBox.o \
     GEventLoop.o \
     GLabel.o \
-    GListBox.o \
-    GObject.o \
-    GNotifier.o \
     GTextBox.o \
     GScrollBar.o \
     GStatusBar.o \
     GWidget.o \
-    GStyle.o \
     GLayout.o \
     GBoxLayout.o \
     GMenuBar.o \
@@ -39,10 +37,7 @@ LIBGUI_OBJS = \
     GClipboard.o \
     GSortingProxyModel.o \
     GStackWidget.o \
-    GEvent.o \
     GScrollableWidget.o \
-    GSocket.o \
-    GTCPSocket.o \
     GMessageBox.o \
     GInputBox.o \
     GDialog.o \
@@ -51,31 +46,28 @@ LIBGUI_OBJS = \
     GAbstractView.o \
     GItemView.o \
     GIcon.o \
-    GElapsedTimer.o \
+    GFrame.o \
+    GTreeView.o \
+    GFileSystemModel.o \
+    GFilePicker.o \
+    GDirectoryModel.o \
+    GSplitter.o \
+    GSpinBox.o \
+    GGroupBox.o \
+    GSlider.o \
+    GResizeCorner.o \
+    GTabWidget.o \
     GWindow.o
 
 OBJS = $(SHAREDGRAPHICS_OBJS) $(LIBGUI_OBJS)
 
-LIBS = -lc
-
 LIBRARY = libgui.a
-STANDARD_FLAGS = -std=c++17
-WARNING_FLAGS = -Wextra -Wall -Wundef -Wcast-qual -Wwrite-strings -Wimplicit-fallthrough
-FLAVOR_FLAGS = -fno-exceptions -fno-rtti
-OPTIMIZATION_FLAGS = -Os
-INCLUDE_FLAGS = -I../LibC -I../Servers -I.. -I.
-
-DEFINES = -DSERENITY -DUSERLAND -DSANITIZE_PTRS -DLIBGUI
-
-CXXFLAGS = -MMD -MP $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS) $(FLAVOR_FLAGS) $(STANDARD_FLAGS) $(INCLUDE_FLAGS) $(DEFINES)
-CXX = i686-pc-serenity-g++
-LD = i686-pc-serenity-ld
-AR = i686-pc-serenity-ar
+DEFINES += -DUSERLAND
 
 all: $(LIBRARY)
 
 $(LIBRARY): $(OBJS)
-	@echo "LIB $@"; $(AR) rcs $@ $(OBJS) $(LIBS)
+	@echo "LIB $@"; $(AR) rcs $@ $(OBJS)
 
 .cpp.o:
 	@echo "CXX $<"; $(CXX) $(CXXFLAGS) -o $@ -c $<
@@ -85,3 +77,9 @@ $(LIBRARY): $(OBJS)
 clean:
 	@echo "CLEAN"; rm -f $(LIBRARY) $(OBJS) *.d
 
+install: $(LIBRARY)
+	mkdir -p ../Root/usr/include/LibGUI
+	# Copy headers
+	rsync -r -a --include '*/' --include '*.h' --exclude '*' . ../Root/usr/include/LibGUI
+	# Install the library
+	cp $(LIBRARY) ../Root/usr/lib

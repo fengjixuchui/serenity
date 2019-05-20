@@ -4,7 +4,7 @@
 #include "IRCLogBuffer.h"
 #include "IRCWindow.h"
 #include "IRCWindowListModel.h"
-#include <LibGUI/GNotifier.h>
+#include <LibCore/CNotifier.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -27,18 +27,34 @@ enum IRCNumeric {
     RPL_ENDOFNAMES = 366,
 };
 
-IRCClient::IRCClient(const String& address, int port)
-    : m_hostname(address)
-    , m_port(port)
-    , m_nickname("anon")
+IRCClient::IRCClient()
+    : m_nickname("seren1ty")
     , m_client_window_list_model(IRCWindowListModel::create(*this))
     , m_log(IRCLogBuffer::create())
 {
-    m_socket = new GTCPSocket(this);
+    m_socket = new CTCPSocket(this);
 }
 
 IRCClient::~IRCClient()
 {
+}
+
+void IRCClient::set_server(const String &hostname, int port)
+{
+    m_hostname = hostname;
+    m_port = port;
+}
+
+void IRCClient::on_socket_connected()
+{
+    m_notifier = make<CNotifier>(m_socket->fd(), CNotifier::Read);
+    m_notifier->on_ready_to_read = [this] { receive_from_server(); };
+
+    send_user();
+    send_nick();
+
+    if (on_connect)
+        on_connect();
 }
 
 bool IRCClient::connect()
@@ -46,26 +62,17 @@ bool IRCClient::connect()
     if (m_socket->is_connected())
         ASSERT_NOT_REACHED();
 
-    IPv4Address ipv4_address(127, 0, 0, 1);
-    bool success = m_socket->connect(GSocketAddress(ipv4_address), m_port);
+    m_socket->on_connected = [this] { on_socket_connected(); };
+    bool success = m_socket->connect(m_hostname, m_port);
     if (!success)
         return false;
-
-    m_notifier = make<GNotifier>(m_socket->fd(), GNotifier::Read);
-    m_notifier->on_ready_to_read = [this] (GNotifier&) { receive_from_server(); };
-
-    send_user();
-    send_nick();
-
-    if (on_connect)
-        on_connect();
     return true;
 }
 
 void IRCClient::receive_from_server()
 {
     while (m_socket->can_read_line()) {
-        auto line = m_socket->read_line(4096);
+        auto line = m_socket->read_line(PAGE_SIZE);
         if (line.is_null()) {
             if (!m_socket->is_connected()) {
                 printf("IRCClient: Connection closed!\n");
@@ -80,9 +87,9 @@ void IRCClient::receive_from_server()
 void IRCClient::process_line(ByteBuffer&& line)
 {
     Message msg;
-    Vector<char> prefix;
-    Vector<char> command;
-    Vector<char> current_parameter;
+    Vector<char, 32> prefix;
+    Vector<char, 32> command;
+    Vector<char, 256> current_parameter;
     enum {
         Start,
         InPrefix,
@@ -143,15 +150,15 @@ void IRCClient::process_line(ByteBuffer&& line)
         }
     }
     if (!current_parameter.is_empty())
-        msg.arguments.append(String(current_parameter.data(), current_parameter.size()));
-    msg.prefix = String(prefix.data(), prefix.size());
-    msg.command = String(command.data(), command.size());
-    handle(msg, String(m_line_buffer.data(), m_line_buffer.size()));
+        msg.arguments.append(String::copy(current_parameter));
+    msg.prefix = String::copy(prefix);
+    msg.command = String::copy(command);
+    handle(msg);
 }
 
 void IRCClient::send(const String& text)
 {
-    if (!m_socket->send(ByteBuffer::wrap((void*)text.characters(), text.length()))) {
+    if (!m_socket->send(ByteBuffer::wrap(text.characters(), text.length()))) {
         perror("send");
         exit(1);
     }
@@ -188,7 +195,7 @@ void IRCClient::send_whois(const String& nick)
     send(String::format("WHOIS %s\r\n", nick.characters()));
 }
 
-void IRCClient::handle(const Message& msg, const String&)
+void IRCClient::handle(const Message& msg)
 {
 #ifdef IRC_DEBUG
     printf("IRCClient::execute: prefix='%s', command='%s', arguments=%d\n",
@@ -554,7 +561,7 @@ void IRCClient::handle_user_command(const String& input)
     auto parts = input.split(' ');
     if (parts.is_empty())
         return;
-    auto command = parts[0].to_uppercase();
+    auto command = String(parts[0]).to_uppercase();
     if (command == "/NICK") {
         if (parts.size() >= 2)
             change_nick(parts[1]);

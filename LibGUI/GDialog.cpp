@@ -1,7 +1,8 @@
 #include <LibGUI/GDialog.h>
 #include <LibGUI/GEventLoop.h>
+#include <LibGUI/GDesktop.h>
 
-GDialog::GDialog(GObject* parent)
+GDialog::GDialog(CObject* parent)
     : GWindow(parent)
 {
     set_modal(true);
@@ -16,12 +17,14 @@ int GDialog::exec()
 {
     ASSERT(!m_event_loop);
     m_event_loop = make<GEventLoop>();
+    auto new_rect = rect();
     if (parent() && parent()->is_window()) {
         auto& parent_window = *static_cast<GWindow*>(parent());
-        auto new_rect = rect();
         new_rect.center_within(parent_window.rect());
-        set_rect(new_rect);
+    } else {
+        new_rect.center_within(GDesktop::the().rect());
     }
+    set_rect(new_rect);
     show();
     auto result = m_event_loop->exec();
     m_event_loop = nullptr;

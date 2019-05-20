@@ -16,23 +16,23 @@ GSortingProxyModel::~GSortingProxyModel()
 {
 }
 
-int GSortingProxyModel::row_count() const
+int GSortingProxyModel::row_count(const GModelIndex& index) const
 {
-    return target().row_count();
+    return target().row_count(index);
 }
 
-int GSortingProxyModel::column_count() const
+int GSortingProxyModel::column_count(const GModelIndex& index) const
 {
-    return target().column_count();
+    return target().column_count(index);
 }
 
 GModelIndex GSortingProxyModel::map_to_target(const GModelIndex& index) const
 {
     if (!index.is_valid())
         return { };
-    if (index.row() >= row_count() || index.column() >= column_count())
+    if (index.row() >= m_row_mappings.size() || index.column() >= column_count())
         return { };
-    return { m_row_mappings[index.row()], index.column() };
+    return target().index(m_row_mappings[index.row()], index.column());
 }
 
 String GSortingProxyModel::row_name(int index) const
@@ -53,11 +53,6 @@ GModel::ColumnMetadata GSortingProxyModel::column_metadata(int index) const
 GVariant GSortingProxyModel::data(const GModelIndex& index, Role role) const
 {
     return target().data(map_to_target(index), role);
-}
-
-void GSortingProxyModel::activate(const GModelIndex& index)
-{
-    target().activate(map_to_target(index));
 }
 
 void GSortingProxyModel::update()
@@ -83,11 +78,13 @@ void GSortingProxyModel::resort()
     m_row_mappings.resize(row_count);
     for (int i = 0; i < row_count; ++i)
         m_row_mappings[i] = i;
-    if (m_key_column == -1)
+    if (m_key_column == -1) {
+        did_update();
         return;
+    }
     quick_sort(m_row_mappings.begin(), m_row_mappings.end(), [&] (auto row1, auto row2) -> bool {
-        auto data1 = target().data({ row1, m_key_column }, GModel::Role::Sort);
-        auto data2 = target().data({ row2, m_key_column }, GModel::Role::Sort);
+        auto data1 = target().data(target().index(row1, m_key_column), GModel::Role::Sort);
+        auto data2 = target().data(target().index(row2, m_key_column), GModel::Role::Sort);
         if (data1 == data2)
             return 0;
         bool is_less_than = data1 < data2;
@@ -95,9 +92,10 @@ void GSortingProxyModel::resort()
     });
     if (previously_selected_target_row != -1) {
         // Preserve selection.
+        ASSERT(m_row_mappings.size() == row_count);
         for (int i = 0; i < row_count; ++i) {
             if (m_row_mappings[i] == previously_selected_target_row) {
-                set_selected_index({ i, 0 });
+                set_selected_index(index(i, 0));
                 break;
             }
         }

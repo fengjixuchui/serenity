@@ -1,5 +1,8 @@
+include ../../Makefile.common
+
 SHAREDGRAPHICS_OBJS = \
     ../../SharedGraphics/Painter.o \
+    ../../SharedGraphics/StylePainter.o \
     ../../SharedGraphics/Font.o \
     ../../SharedGraphics/Rect.o \
     ../../SharedGraphics/GraphicsBitmap.o \
@@ -9,8 +12,7 @@ SHAREDGRAPHICS_OBJS = \
     ../../SharedGraphics/PNGLoader.o
 
 WINDOWSERVER_OBJS = \
-    WSMessageReceiver.o \
-    WSMessageLoop.o \
+    WSEventLoop.o \
     WSWindow.o \
     WSWindowManager.o \
     WSScreen.o \
@@ -20,29 +22,21 @@ WINDOWSERVER_OBJS = \
     WSClientConnection.o \
     WSWindowSwitcher.o \
     WSClipboard.o \
+    WSCursor.o \
+    WSWindowFrame.o \
+    WSButton.o \
+    WSCPUMonitor.o \
     main.o
 
 APP = WindowServer
 OBJS = $(SHAREDGRAPHICS_OBJS) $(WINDOWSERVER_OBJS)
 
-STANDARD_FLAGS = -std=c++17
-WARNING_FLAGS = -Wextra -Wall -Wundef -Wcast-qual -Wwrite-strings -Wimplicit-fallthrough
-FLAVOR_FLAGS = -fno-exceptions -fno-rtti
-OPTIMIZATION_FLAGS = -Os
-INCLUDE_FLAGS = -I.. -I../.. -I. -I../../LibC
-LDFLAGS = -L../../LibC
-
-DEFINES = -DSERENITY -DSANITIZE_PTRS -DUSERLAND
-
-CXXFLAGS = -MMD -MP $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS) $(FLAVOR_FLAGS) $(STANDARD_FLAGS) $(INCLUDE_FLAGS) $(DEFINES)
-CXX = i686-pc-serenity-g++
-LD = i686-pc-serenity-ld
-AR = i686-pc-serenity-ar
+DEFINES += -DUSERLAND
 
 all: $(APP)
 
 $(APP): $(OBJS)
-	$(LD) -o $(APP) $(LDFLAGS) $(OBJS) -lc
+	$(LD) -o $(APP) $(LDFLAGS) $(OBJS) -lc -lcore
 
 .cpp.o:
 	@echo "CXX $<"; $(CXX) $(CXXFLAGS) -o $@ -c $<
@@ -50,5 +44,5 @@ $(APP): $(OBJS)
 -include $(OBJS:%.o=%.d)
 
 clean:
-	@echo "CLEAN"; rm -f $(APPS) $(OBJS) *.d
+	@echo "CLEAN"; rm -f $(APP) $(OBJS) *.d
 

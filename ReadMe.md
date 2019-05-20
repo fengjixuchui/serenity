@@ -1,51 +1,61 @@
 # Serenity
 
-x86 Unix-like operating system for IBM PC-compatibles.
+Graphical Unix-like operating system for x86 computers.
 
 ## About
 
-I always wondered what it would be like to write my own operating system, but I never took it seriously. Until now.
+*I always wondered what it would be like to write my own operating system, but I never took it seriously. Until now.*
 
-I've grown tired of cutesy and condescending software that doesn't take itself or the user seriously. This is my effort to bring back the feeling of computing I once knew.
+Serenity is a love letter to '90s user interfaces, with a custom Unix-like core. It flatters with sincerity by stealing beautiful ideas from various other systems.
 
-Roughly speaking, the goal here is a marriage between the aesthetic of late-1990s productivity software and the power-user accessibility of late-2000s \*nix. This is a system by me, for me, based on the things I like.
+Roughly speaking, the goal is a marriage between the aesthetic of late-1990s productivity software and the power-user accessibility of late-2000s \*nix. This is a system by me, for me, based on the things I like.
+
+If you like some of the same things, you are welcome to join the project. It would be great to one day change the above to say "this is a system by us, for us, based on the things we like." :^)
+
+I regularly post raw hacking sessions and demos on [my YouTube channel](https://www.youtube.com/channel/UC3ts8coMP645hZw9JSD3pqQ).
+
+There's also a [Patreon](https://www.patreon.com/serenityos) if you would like to show some support that way.
 
 ## Screenshot
 
-![Screenshot as of cdb82f6](https://raw.githubusercontent.com/awesomekling/serenity/master/Meta/screenshot-cdb82f6.png)
+![Screenshot as of d727005](https://raw.githubusercontent.com/awesomekling/serenity/master/Meta/screenshot-d727005.png)
 
 ## Current features
 
 * Pre-emptive multitasking
+* Multithreading
 * Compositing window server
 * IPv4 networking with ARP, TCP, UDP and ICMP
 * ext2 filesystem
 * Unix-like libc and userland
+* Shell with pipes and I/O redirection
 * mmap()
 * /proc filesystem
 * Local sockets
-* Pseudoterminals
-* Event-driven GUI library
+* Pseudoterminals (with /dev/pts filesystem)
+* Event loop library (LibCore)
+* High-level GUI library (LibGUI)
+* Visual GUI design tool
+* PNG format support
 * Text editor
 * IRC client
 * DNS lookup
+* Desktop games: Minesweeper and Snake
 * Other stuff I can't think of right now...
 
 ## How do I build and run this?
 
-You need a freestanding cross-compiler for the i686-elf target (for the kernel) and another
-cross-compiler for the i686-pc-serenity target (for all the userspace stuff.) It's probably possible to coerce it into building with vanilla gcc/clang if you pass all the right compiler flags, but I haven't been doing that for a while.
+Go into the Toolchain/ directory and run the **BuildIt.sh** script. Then source the **UseIt.sh** script to put the i686-pc-serenity toolchain in your $PATH.
 
-There's [a helpful guide on building a GCC cross-compiler](https://wiki.osdev.org/GCC_Cross-Compiler) on the OSDev wiki.
+Once you've done both of those, go into the Kernel directory, then run
+**makeall.sh**, and if nothing breaks too much, take it for a spin by using
+**run**.
 
-I've only tested this on an Ubuntu 18.10 host with GCC 8.2.0, so I'm not sure it works anywhere else.
+Otherwise, see the older [step-by-step guide to building Serenity](https://github.com/awesomekling/serenity/blob/master/Meta/BuildInstructions.md)
 
-If you'd like to run it, here's how you'd get it to boot:
+## IRC
 
-    cd Kernel
-    ./makeall.sh
-    ./run            # Runs in QEMU
-    ./run b          # Runs in bochs (limited networking support)
+Come chat in `#serenityos` on the Freenode IRC network.
 
 ## Author
 
@@ -53,4 +63,4 @@ If you'd like to run it, here's how you'd get it to boot:
 
 ## License
 
-Undecided. Probably something close to 2-clause BSD.
+Serenity is licensed under a 2-clause BSD license.

@@ -6,19 +6,18 @@
 IRCChannelMemberListModel::IRCChannelMemberListModel(IRCChannel& channel)
     : m_channel(channel)
 {
-    set_activates_on_selection(true);
 }
 
 IRCChannelMemberListModel::~IRCChannelMemberListModel()
 {
 }
 
-int IRCChannelMemberListModel::row_count() const
+int IRCChannelMemberListModel::row_count(const GModelIndex&) const
 {
     return m_channel.member_count();
 }
 
-int IRCChannelMemberListModel::column_count() const
+int IRCChannelMemberListModel::column_count(const GModelIndex&) const
 {
     return 1;
 }
@@ -52,10 +51,4 @@ GVariant IRCChannelMemberListModel::data(const GModelIndex& index, Role role) co
 void IRCChannelMemberListModel::update()
 {
     did_update();
-}
-
-void IRCChannelMemberListModel::activate(const GModelIndex& index)
-{
-    if (on_activation)
-        on_activation(m_channel.member_at(index.row()));
 }

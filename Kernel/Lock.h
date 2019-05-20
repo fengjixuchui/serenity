@@ -4,6 +4,7 @@
 #include <AK/Types.h>
 #include <Kernel/i386.h>
 #include <Kernel/Scheduler.h>
+#include <Kernel/KSyms.h>
 
 class Thread;
 extern Thread* current;
@@ -26,6 +27,7 @@ public:
 
     void lock();
     void unlock();
+    bool unlock_if_locked();
 
     const char* name() const { return m_name; }
 
@@ -51,6 +53,7 @@ private:
 {
     if (!are_interrupts_enabled()) {
         kprintf("Interrupts disabled when trying to take Lock{%s}\n", m_name);
+        dump_backtrace();
         hang();
     }
     ASSERT(!Scheduler::is_active());
@@ -87,6 +90,31 @@ inline void Lock::unlock()
             return;
         }
         Scheduler::donate_to(m_holder, m_name);
+    }
+}
+
+inline bool Lock::unlock_if_locked()
+{
+    for (;;) {
+        if (CAS(&m_lock, 1, 0) == 0) {
+            if (m_level == 0) {
+                memory_barrier();
+                m_lock = 0;
+                return false;
+            }
+            ASSERT(m_holder == current);
+            ASSERT(m_level);
+            --m_level;
+            if (m_level) {
+                memory_barrier();
+                m_lock = 0;
+                return false;
+            }
+            m_holder = nullptr;
+            memory_barrier();
+            m_lock = 0;
+            return true;
+        }
     }
 }
 

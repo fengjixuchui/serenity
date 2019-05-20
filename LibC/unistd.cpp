@@ -9,10 +9,18 @@
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#include <fcntl.h>
 #include <Kernel/Syscall.h>
 #include <AK/Vector.h>
+#include <AK/AKString.h>
 
 extern "C" {
+
+int systrace(pid_t pid)
+{
+    int rc = syscall(SC_systrace, pid);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
+}
 
 int chown(const char* pathname, uid_t uid, gid_t gid)
 {
@@ -28,7 +36,7 @@ pid_t fork()
 
 int execv(const char* path, char* const argv[])
 {
-    return execve(path, argv, nullptr);
+    return execve(path, argv, environ);
 }
 
 int execve(const char* filename, char* const argv[], char* const envp[])
@@ -37,15 +45,37 @@ int execve(const char* filename, char* const argv[], char* const envp[])
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
+int execvpe(const char* filename, char* const argv[], char* const envp[])
+{
+    int rc = execve(filename, argv, environ);
+    if (rc < 0 && errno != ENOENT) {
+        fprintf(stderr, "execvpe() failed on first with %s\n", strerror(errno));
+        return rc;
+    }
+    String path = getenv("PATH");
+    if (path.is_empty())
+        path = "/bin:/usr/bin";
+    auto parts = path.split(':');
+    for (auto& part : parts) {
+        auto candidate = String::format("%s/%s", part.characters(), filename);
+        int rc = execve(candidate.characters(), argv, environ);
+        if (rc < 0 && errno != ENOENT) {
+            printf("execvpe() failed on attempt (%s) with %s\n", candidate.characters(), strerror(errno));
+            return rc;
+        }
+    }
+    errno = ENOENT;
+    return -1;
+}
+
 int execvp(const char* filename, char* const argv[])
 {
-    // FIXME: This should do some sort of shell-like path resolution!
-    return execve(filename, argv, nullptr);
+    return execvpe(filename, argv, environ);
 }
 
 int execl(const char* filename, const char* arg0, ...)
 {
-    Vector<const char*> args;
+    Vector<const char*, 16> args;
     args.append(arg0);
 
     va_list ap;
@@ -58,7 +88,7 @@ int execl(const char* filename, const char* arg0, ...)
     }
     va_end(ap);
     args.append(nullptr);
-    return execve(filename, (char* const *)args.data(), nullptr);
+    return execve(filename, const_cast<char* const*>(args.data()), environ);
 }
 
 uid_t getuid()
@@ -123,6 +153,11 @@ pid_t getpgrp()
 {
     int rc = syscall(SC_getpgrp);
     __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+int creat(const char* path, mode_t mode)
+{
+    return open(path, O_CREAT | O_WRONLY | O_TRUNC, mode);
 }
 
 int open(const char* path, int options, ...)
@@ -329,30 +364,30 @@ int access(const char* pathname, int mode)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
-int mknod(const char* pathname, mode_t, dev_t)
+int mknod(const char* pathname, mode_t mode, dev_t dev)
 {
-    (void) pathname;
-    assert(false);
+    int rc = syscall(SC_mknod, pathname, mode, dev);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
 long fpathconf(int fd, int name)
 {
     (void) fd;
     (void) name;
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 long pathconf(const char* path, int name)
 {
     (void) path;
     (void) name;
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 void _exit(int status)
 {
     syscall(SC_exit, status);
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 void sync()
@@ -416,9 +451,16 @@ int create_thread(int(*entry)(void*), void* argument)
     __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
+void exit_thread(int code)
+{
+    syscall(SC_exit_thread, code);
+    ASSERT_NOT_REACHED();
+}
+
 int ftruncate(int fd, off_t length)
 {
-    ASSERT_NOT_REACHED();
+    int rc = syscall(SC_ftruncate, fd, length);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
 int gettid()
@@ -431,6 +473,18 @@ int donate(int tid)
 {
     int rc = syscall(SC_donate, tid);
     __RETURN_WITH_ERRNO(rc, rc, -1);
+}
+
+void sysbeep()
+{
+    syscall(SC_beep);
+}
+
+int fsync(int fd)
+{
+    UNUSED_PARAM(fd);
+    dbgprintf("FIXME: Implement fsync()\n");
+    return 0;
 }
 
 }

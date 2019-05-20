@@ -4,6 +4,8 @@
 
 namespace AK {
 
+template<typename T> class OwnPtr;
+
 template<typename T>
 class WeakPtr {
     friend class Weakable<T>;
@@ -35,10 +37,15 @@ public:
     T& operator*() { return *ptr(); }
     const T& operator*() const { return *ptr(); }
 
+    operator const T*() const { return ptr(); }
+    operator T*() { return ptr(); }
+
     bool is_null() const { return !m_link || !m_link->ptr(); }
     void clear() { m_link = nullptr; }
 
     WeakLink<T>* leak_link() { return m_link.leak_ref(); }
+
+    bool operator==(const OwnPtr<T>& other) const { return ptr() == other.ptr(); }
 
 private:
     WeakPtr(RetainPtr<WeakLink<T>>&& link) : m_link(move(link)) { }

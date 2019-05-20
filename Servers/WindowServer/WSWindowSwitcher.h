@@ -3,14 +3,16 @@
 #include <SharedGraphics/Rect.h>
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
-#include <WindowServer/WSMessageReceiver.h>
+#include <LibCore/CObject.h>
 
 class Painter;
 class WSKeyEvent;
 class WSWindow;
 
-class WSWindowSwitcher : public WSMessageReceiver {
+class WSWindowSwitcher : public CObject {
 public:
+    static WSWindowSwitcher& the();
+
     WSWindowSwitcher();
     virtual ~WSWindowSwitcher() override;
 
@@ -22,19 +24,22 @@ public:
 
     void on_key_event(const WSKeyEvent&);
     void refresh();
+    void refresh_if_needed();
 
     void draw();
 
-    int item_height() { return 20; }
+    int thumbnail_width() { return 40; }
+    int thumbnail_height() { return 40; }
+
+    int item_height() { return 10 + thumbnail_height(); }
     int padding() { return 8; }
+    int item_padding() { return 8; }
 
     WSWindow* selected_window();
 
     WSWindow* switcher_window() { return m_switcher_window.ptr(); }
 
 private:
-    virtual void on_message(WSMessage&) override;
-
     OwnPtr<WSWindow> m_switcher_window;
     Rect m_rect;
     bool m_visible { false };

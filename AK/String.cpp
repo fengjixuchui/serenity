@@ -47,18 +47,24 @@ String String::isolated_copy() const
     return String(move(*impl));
 }
 
-String String::substring(ssize_t start, ssize_t length) const
+String String::substring(int start, int length) const
 {
     if (!length)
-        return empty();
+        return { };
     ASSERT(m_impl);
     ASSERT(start + length <= m_impl->length());
     // FIXME: This needs some input bounds checking.
-    char* buffer;
-    auto new_impl = StringImpl::create_uninitialized(length, buffer);
-    memcpy(buffer, characters() + start, length);
-    buffer[length] = '\0';
-    return new_impl;
+    return { characters() + start, length };
+}
+
+StringView String::substring_view(int start, int length) const
+{
+    if (!length)
+        return { };
+    ASSERT(m_impl);
+    ASSERT(start + length <= m_impl->length());
+    // FIXME: This needs some input bounds checking.
+    return { characters() + start, length };
 }
 
 Vector<String> String::split(const char separator) const
@@ -85,6 +91,30 @@ Vector<String> String::split(const char separator) const
     return v;
 }
 
+Vector<StringView> String::split_view(const char separator) const
+{
+    if (is_empty())
+        return { };
+
+    Vector<StringView> v;
+    ssize_t substart = 0;
+    for (ssize_t i = 0; i < length(); ++i) {
+        char ch = characters()[i];
+        if (ch == separator) {
+            ssize_t sublen = i - substart;
+            if (sublen != 0)
+                v.append(substring_view(substart, sublen));
+            substart = i + 1;
+        }
+    }
+    ssize_t taillen = length() - substart;
+    if (taillen != 0)
+        v.append(substring_view(substart, taillen));
+    if (characters()[length() - 1] == separator)
+        v.append(empty().view());
+    return v;
+}
+
 ByteBuffer String::to_byte_buffer() const
 {
     if (!m_impl)
@@ -92,13 +122,12 @@ ByteBuffer String::to_byte_buffer() const
     return ByteBuffer::copy(reinterpret_cast<const byte*>(characters()), length());
 }
 
-String String::from_byte_buffer(const ByteBuffer& buffer)
+// FIXME: Duh.
+int String::to_int(bool& ok) const
 {
-    if (buffer.is_null())
-        return nullptr;
-    if (buffer.is_empty())
-        return empty();
-    return String((const char*)buffer.pointer(), buffer.size());
+    unsigned value = to_uint(ok);
+    ASSERT(ok);
+    return (int)value;
 }
 
 unsigned String::to_uint(bool& ok) const
@@ -135,6 +164,16 @@ bool String::ends_with(const String& str) const
     if (str.length() > length())
         return false;
     return !memcmp(characters() + (length() - str.length()), str.characters(), str.length());
+}
+
+String String::repeated(char ch, int count)
+{
+    if (!count)
+        return empty();
+    char* buffer;
+    auto impl = StringImpl::create_uninitialized(count, buffer);
+    memset(buffer, ch, count);
+    return *impl;
 }
 
 }

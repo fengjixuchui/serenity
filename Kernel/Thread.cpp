@@ -1,11 +1,22 @@
 #include <Kernel/Thread.h>
 #include <Kernel/Scheduler.h>
-#include <Kernel/system.h>
 #include <Kernel/Process.h>
-#include <Kernel/MemoryManager.h>
+#include <Kernel/FileSystem/FileDescriptor.h>
+#include <Kernel/VM/MemoryManager.h>
 #include <LibC/signal_numbers.h>
 
-InlineLinkedList<Thread>* g_threads;
+HashTable<Thread*>& thread_table()
+{
+    ASSERT_INTERRUPTS_DISABLED();
+    static HashTable<Thread*>* table;
+    if (!table)
+        table = new HashTable<Thread*>;
+    return *table;
+}
+
+InlineLinkedList<Thread>* g_runnable_threads;
+InlineLinkedList<Thread>* g_nonrunnable_threads;
+
 static const dword default_kernel_stack_size = 16384;
 static const dword default_userspace_stack_size = 65536;
 
@@ -13,9 +24,9 @@ Thread::Thread(Process& process)
     : m_process(process)
     , m_tid(process.m_next_tid++)
 {
-    dbgprintf("Thread: New thread TID=%u in %s(%u)\n", m_tid, process.name().characters(), process.pid());
+    dbgprintf("Thread{%p}: New thread TID=%u in %s(%u)\n", this, m_tid, process.name().characters(), process.pid());
     set_default_signal_dispositions();
-    memset(&m_fpu_state, 0, sizeof(FPUState));
+    m_fpu_state = (FPUState*)kmalloc_aligned(sizeof(FPUState), 16);
     memset(&m_tss, 0, sizeof(m_tss));
 
     // Only IF is set when a process boots.
@@ -44,15 +55,15 @@ Thread::Thread(Process& process)
     if (m_process.is_ring0()) {
         // FIXME: This memory is leaked.
         // But uh, there's also no kernel process termination, so I guess it's not technically leaked...
-        dword stack_bottom = (dword)kmalloc_eternal(default_kernel_stack_size);
-        m_stack_top0 = (stack_bottom + default_kernel_stack_size) & 0xffffff8;
-        m_tss.esp = m_stack_top0;
+        m_kernel_stack_base = (dword)kmalloc_eternal(default_kernel_stack_size);
+        m_tss.esp = (m_kernel_stack_base + default_kernel_stack_size) & 0xfffffff8u;
+
     } else {
         // Ring3 processes need a separate stack for Ring0.
-        m_kernel_stack = kmalloc(default_kernel_stack_size);
-        m_stack_top0 = ((dword)m_kernel_stack + default_kernel_stack_size) & 0xffffff8;
+        m_kernel_stack_region = MM.allocate_kernel_region(default_kernel_stack_size, String::format("Kernel Stack (Thread %d)", m_tid));
+        m_kernel_stack_base = m_kernel_stack_region->laddr().get();
         m_tss.ss0 = 0x10;
-        m_tss.esp0 = m_stack_top0;
+        m_tss.esp0 = m_kernel_stack_region->laddr().offset(default_kernel_stack_size).get() & 0xfffffff8u;
     }
 
     // HACK: Ring2 SS in the TSS is the current PID.
@@ -61,16 +72,20 @@ Thread::Thread(Process& process)
 
     if (m_process.pid() != 0) {
         InterruptDisabler disabler;
-        g_threads->prepend(this);
+        thread_table().set(this);
+        set_thread_list(g_nonrunnable_threads);
     }
 }
 
 Thread::~Thread()
 {
     dbgprintf("~Thread{%p}\n", this);
+    kfree_aligned(m_fpu_state);
     {
         InterruptDisabler disabler;
-        g_threads->remove(this);
+        if (m_thread_list)
+            m_thread_list->remove(this);
+        thread_table().remove(this);
     }
 
     if (g_last_fpu_thread == this)
@@ -78,28 +93,17 @@ Thread::~Thread()
 
     if (selector())
         gdt_free_entry(selector());
-
-    if (m_kernel_stack) {
-        kfree(m_kernel_stack);
-        m_kernel_stack = nullptr;
-    }
-
-    if (m_kernel_stack_for_signal_handler) {
-        kfree(m_kernel_stack_for_signal_handler);
-        m_kernel_stack_for_signal_handler = nullptr;
-    }
 }
 
 void Thread::unblock()
 {
+    m_blocked_descriptor = nullptr;
     if (current == this) {
-        system.nblocked--;
-        m_state = Thread::Running;
+        set_state(Thread::Running);
         return;
     }
     ASSERT(m_state != Thread::Runnable && m_state != Thread::Running);
-    system.nblocked--;
-    m_state = Thread::Runnable;
+    set_state(Thread::Runnable);
 }
 
 void Thread::snooze_until(Alarm& alarm)
@@ -111,20 +115,28 @@ void Thread::snooze_until(Alarm& alarm)
 
 void Thread::block(Thread::State new_state)
 {
+    bool did_unlock = process().big_lock().unlock_if_locked();
     if (state() != Thread::Running) {
         kprintf("Thread::block: %s(%u) block(%u/%s) with state=%u/%s\n", process().name().characters(), process().pid(), new_state, to_string(new_state), state(), to_string(state()));
     }
     ASSERT(state() == Thread::Running);
-    system.nblocked++;
     m_was_interrupted_while_blocked = false;
     set_state(new_state);
     Scheduler::yield();
+    if (did_unlock)
+        process().big_lock().lock();
+}
+
+void Thread::block(Thread::State new_state, FileDescriptor& descriptor)
+{
+    m_blocked_descriptor = &descriptor;
+    block(new_state);
 }
 
 void Thread::sleep(dword ticks)
 {
     ASSERT(state() == Thread::Running);
-    current->set_wakeup_time(system.uptime + ticks);
+    current->set_wakeup_time(g_uptime + ticks);
     current->block(Thread::BlockedSleep);
 }
 
@@ -158,8 +170,9 @@ const char* to_string(Thread::State state)
 void Thread::finalize()
 {
     dbgprintf("Finalizing Thread %u in %s(%u)\n", tid(), m_process.name().characters(), pid());
-    m_blocked_socket = nullptr;
     set_state(Thread::State::Dead);
+
+    m_blocked_descriptor = nullptr;
 
     if (this == &m_process.main_thread())
         m_process.finalize();
@@ -167,7 +180,7 @@ void Thread::finalize()
 
 void Thread::finalize_dying_threads()
 {
-    Vector<Thread*> dying_threads;
+    Vector<Thread*, 32> dying_threads;
     {
         InterruptDisabler disabler;
         for_each_in_state(Thread::State::Dying, [&] (Thread& thread) {
@@ -347,23 +360,21 @@ ShouldUnblockThread Thread::dispatch_signal(byte signal)
         kprintf("dispatch_signal to %s(%u) in state=%s with return to %w:%x\n", name().characters(), pid(), to_string(state()), ret_cs, ret_eip);
 #endif
         ASSERT(is_blocked());
-        m_tss_to_resume_kernel = m_tss;
+        m_tss_to_resume_kernel = make<TSS32>(m_tss);
 #ifdef SIGNAL_DEBUG
-        kprintf("resume tss pc: %w:%x stack: %w:%x flags: %x cr3: %x\n", m_tss_to_resume_kernel.cs, m_tss_to_resume_kernel.eip, m_tss_to_resume_kernel.ss, m_tss_to_resume_kernel.esp, m_tss_to_resume_kernel.eflags, m_tss_to_resume_kernel.cr3);
+        kprintf("resume tss pc: %w:%x stack: %w:%x flags: %x cr3: %x\n", m_tss_to_resume_kernel.cs, m_tss_to_resume_kernel->eip, m_tss_to_resume_kernel->ss, m_tss_to_resume_kernel->esp, m_tss_to_resume_kernel->eflags, m_tss_to_resume_kernel->cr3);
 #endif
 
         if (!m_signal_stack_user_region) {
-            m_signal_stack_user_region = m_process.allocate_region(LinearAddress(), default_userspace_stack_size, "Signal stack (user)");
+            m_signal_stack_user_region = m_process.allocate_region(LinearAddress(), default_userspace_stack_size, String::format("User Signal Stack (Thread %d)", m_tid));
             ASSERT(m_signal_stack_user_region);
         }
-        if (!m_kernel_stack_for_signal_handler) {
-            m_kernel_stack_for_signal_handler = kmalloc(default_kernel_stack_size);
-            ASSERT(m_kernel_stack_for_signal_handler);
-        }
+        if (!m_kernel_stack_for_signal_handler_region)
+            m_kernel_stack_for_signal_handler_region = MM.allocate_kernel_region(default_kernel_stack_size, String::format("Kernel Signal Stack (Thread %d)", m_tid));
         m_tss.ss = 0x23;
         m_tss.esp = m_signal_stack_user_region->laddr().offset(default_userspace_stack_size).get();
         m_tss.ss0 = 0x10;
-        m_tss.esp0 = (dword)m_kernel_stack_for_signal_handler + default_kernel_stack_size;
+        m_tss.esp0 = m_kernel_stack_for_signal_handler_region->laddr().offset(default_kernel_stack_size).get();
 
         push_value_on_stack(0);
     } else {
@@ -431,10 +442,9 @@ void Thread::push_value_on_stack(dword value)
 
 void Thread::make_userspace_stack_for_main_thread(Vector<String> arguments, Vector<String> environment)
 {
-    auto* region = m_process.allocate_region(LinearAddress(), default_userspace_stack_size, "stack");
+    auto* region = m_process.allocate_region(LinearAddress(), default_userspace_stack_size, "Stack (Main thread)");
     ASSERT(region);
-    m_stack_top3 = region->laddr().offset(default_userspace_stack_size).get();
-    m_tss.esp = m_stack_top3;
+    m_tss.esp = region->laddr().offset(default_userspace_stack_size).get();
 
     char* stack_base = (char*)region->laddr().get();
     int argc = arguments.size();
@@ -478,10 +488,9 @@ void Thread::make_userspace_stack_for_main_thread(Vector<String> arguments, Vect
 
 void Thread::make_userspace_stack_for_secondary_thread(void *argument)
 {
-    auto* region = m_process.allocate_region(LinearAddress(), default_userspace_stack_size, String::format("Thread %u Stack", tid()));
+    auto* region = m_process.allocate_region(LinearAddress(), default_userspace_stack_size, String::format("Stack (Thread %d)", tid()));
     ASSERT(region);
-    m_stack_top3 = region->laddr().offset(default_userspace_stack_size).get();
-    m_tss.esp = m_stack_top3;
+    m_tss.esp = region->laddr().offset(default_userspace_stack_size).get();
 
     // NOTE: The stack needs to be 16-byte aligned.
     push_value_on_stack((dword)argument);
@@ -493,19 +502,20 @@ Thread* Thread::clone(Process& process)
     auto* clone = new Thread(process);
     memcpy(clone->m_signal_action_data, m_signal_action_data, sizeof(m_signal_action_data));
     clone->m_signal_mask = m_signal_mask;
-    clone->m_fpu_state = m_fpu_state;
+    clone->m_fpu_state = (FPUState*)kmalloc_aligned(sizeof(FPUState), 16);
+    memcpy(clone->m_fpu_state, m_fpu_state, sizeof(FPUState));
     clone->m_has_used_fpu = m_has_used_fpu;
     return clone;
 }
 
-KResult Thread::wait_for_connect(Socket& socket)
+KResult Thread::wait_for_connect(FileDescriptor& descriptor)
 {
+    ASSERT(descriptor.is_socket());
+    auto& socket = *descriptor.socket();
     if (socket.is_connected())
         return KSuccess;
-    m_blocked_socket = socket;
-    block(Thread::State::BlockedConnect);
+    block(Thread::State::BlockedConnect, descriptor);
     Scheduler::yield();
-    m_blocked_socket = nullptr;
     if (!socket.is_connected())
         return KResult(-ECONNREFUSED);
     return KSuccess;
@@ -513,7 +523,8 @@ KResult Thread::wait_for_connect(Socket& socket)
 
 void Thread::initialize()
 {
-    g_threads = new InlineLinkedList<Thread>;
+    g_runnable_threads = new InlineLinkedList<Thread>;
+    g_nonrunnable_threads = new InlineLinkedList<Thread>;
     Scheduler::initialize();
 }
 
@@ -521,7 +532,33 @@ Vector<Thread*> Thread::all_threads()
 {
     Vector<Thread*> threads;
     InterruptDisabler disabler;
-    for (auto* thread = g_threads->head(); thread; thread = thread->next())
-        threads.append(thread);
+    threads.ensure_capacity(thread_table().size());
+    for (auto* thread : thread_table())
+        threads.unchecked_append(thread);
     return threads;
+}
+
+bool Thread::is_thread(void* ptr)
+{
+    ASSERT_INTERRUPTS_DISABLED();
+    return thread_table().contains((Thread*)ptr);
+}
+
+void Thread::set_thread_list(InlineLinkedList<Thread>* thread_list)
+{
+    ASSERT(pid() != 0);
+    if (m_thread_list == thread_list)
+        return;
+    if (m_thread_list)
+        m_thread_list->remove(this);
+    if (thread_list)
+        thread_list->append(this);
+    m_thread_list = thread_list;
+}
+
+void Thread::set_state(State new_state)
+{
+    m_state = new_state;
+    if (m_process.pid() != 0)
+        set_thread_list(thread_list_for_state(new_state));
 }

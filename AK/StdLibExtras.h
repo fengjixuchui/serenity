@@ -3,20 +3,26 @@
 #ifdef KERNEL
 #include <Kernel/StdLib.h>
 #else
-#include <LibC/stdlib.h>
-#include <LibC/string.h>
+#include <stdlib.h>
+#include <string.h>
 #endif
+
+#define UNUSED_PARAM(x) (void)x
 
 #include <AK/Types.h>
 
+#ifndef KERNEL
 extern "C" void* mmx_memcpy(void* to, const void* from, size_t);
+#endif
 
 [[gnu::always_inline]] inline void fast_dword_copy(dword* dest, const dword* src, size_t count)
 {
+#ifndef KERNEL
     if (count >= 256) {
         mmx_memcpy(dest, src, count * sizeof(count));
         return;
     }
+#endif
     asm volatile(
         "rep movsl\n"
         : "=S"(src), "=D"(dest), "=c"(count)
@@ -33,6 +39,11 @@ extern "C" void* mmx_memcpy(void* to, const void* from, size_t);
         : "D"(dest), "c"(count), "a"(value)
         : "memory"
     );
+}
+
+inline constexpr dword round_up_to_power_of_two(dword value, dword power_of_two)
+{
+    return ((value - 1) & ~ (power_of_two - 1)) + power_of_two;
 }
 
 namespace AK {

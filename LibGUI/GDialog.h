@@ -14,8 +14,10 @@ public:
     int result() const { return m_result; }
     void done(int result);
 
+    virtual const char* class_name() const override { return "GDialog"; }
+
 protected:
-    explicit GDialog(GObject* parent);
+    explicit GDialog(CObject* parent);
 
 private:
     OwnPtr<GEventLoop> m_event_loop;

@@ -9,8 +9,10 @@ __BEGIN_DECLS
 #define AF_MASK 0xff
 #define AF_UNSPEC 0
 #define AF_LOCAL 1
+#define AF_UNIX AF_LOCAL
 #define AF_INET 2
 #define PF_LOCAL AF_LOCAL
+#define PF_UNIX PF_LOCAL
 #define PF_INET AF_INET
 
 #define SOCK_TYPE_MASK 0xff
@@ -23,6 +25,8 @@ __BEGIN_DECLS
 #define IPPROTO_ICMP 1
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
+
+#define MSG_DONTWAIT 0x40
 
 struct sockaddr {
     uint16_t sa_family;
@@ -47,6 +51,7 @@ struct sockaddr_in {
 };
 
 #define SOL_SOCKET 1
+#define SOMAXCONN 128
 
 #define SO_RCVTIMEO 1
 #define SO_SNDTIMEO 2
@@ -62,6 +67,7 @@ ssize_t recv(int sockfd, void*, size_t, int flags);
 ssize_t recvfrom(int sockfd, void*, size_t, int flags, struct sockaddr*, socklen_t*);
 int getsockopt(int sockfd, int level, int option, void*, socklen_t*);
 int setsockopt(int sockfd, int level, int option, const void*, socklen_t);
+int getsockname(int sockfd, struct sockaddr*, socklen_t*);
 
 __END_DECLS
 

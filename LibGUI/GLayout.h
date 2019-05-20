@@ -15,6 +15,9 @@ public:
 
     void add_widget(GWidget&);
     void add_layout(OwnPtr<GLayout>&&);
+    void add_spacer();
+
+    void remove_widget(GWidget&);
 
     virtual void run(GWidget&) = 0;
 
@@ -29,13 +32,23 @@ public:
 
 protected:
     struct Entry {
+        enum class Type {
+            Invalid = 0,
+            Widget,
+            Layout,
+            Spacer,
+        };
+
+        Type type { Type::Invalid };
         WeakPtr<GWidget> widget;
         OwnPtr<GLayout> layout;
     };
+    void add_entry(Entry&&);
+
     WeakPtr<GWidget> m_owner;
     Vector<Entry> m_entries;
 
     GMargins m_margins;
-    int m_spacing { 0 };
+    int m_spacing { 4 };
 };
 

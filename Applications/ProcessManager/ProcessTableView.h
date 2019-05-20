@@ -4,19 +4,19 @@
 #include <AK/Function.h>
 #include <unistd.h>
 
+class GraphWidget;
 class ProcessModel;
 
 class ProcessTableView final : public GTableView {
 public:
-    explicit ProcessTableView(GWidget* parent);
+    ProcessTableView(GraphWidget&, GWidget* parent);
     virtual ~ProcessTableView() override;
 
     pid_t selected_pid() const;
 
-protected:
-    virtual void model_notification(const GModelNotification&) override;
+    void refresh();
 
 private:
-    virtual void timer_event(GTimerEvent&) override;
+    virtual void model_notification(const GModelNotification&) override;
 };
 

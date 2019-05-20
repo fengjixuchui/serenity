@@ -1,10 +1,20 @@
 #include <WindowServer/WSWindowSwitcher.h>
 #include <WindowServer/WSWindowManager.h>
-#include <WindowServer/WSMessage.h>
+#include <WindowServer/WSEvent.h>
 #include <SharedGraphics/Font.h>
+#include <SharedGraphics/StylePainter.h>
+
+static WSWindowSwitcher* s_the;
+
+WSWindowSwitcher& WSWindowSwitcher::the()
+{
+    ASSERT(s_the);
+    return *s_the;
+}
 
 WSWindowSwitcher::WSWindowSwitcher()
 {
+    s_the = this;
 }
 
 WSWindowSwitcher::~WSWindowSwitcher()
@@ -32,7 +42,7 @@ WSWindow* WSWindowSwitcher::selected_window()
 
 void WSWindowSwitcher::on_key_event(const WSKeyEvent& event)
 {
-    if (event.type() == WSMessage::KeyUp) {
+    if (event.type() == WSEvent::KeyUp) {
         if (event.key() == Key_Logo) {
             if (auto* window = selected_window())
                 WSWindowManager::the().move_to_front_and_make_active(*window);
@@ -77,45 +87,60 @@ void WSWindowSwitcher::draw()
             rect_text_color = Color::LightGray;
         } else {
             text_color = Color::Black;
-            rect_text_color = Color::DarkGray;
+            rect_text_color = Color::MidGray;
         }
-        painter.blit(item_rect.location().translated(0, (item_rect.height() - window.icon().height()) / 2), window.icon(), window.icon().rect());
-        painter.draw_text(item_rect.translated(window.icon().width() + 4, 0), window.title(), WSWindowManager::the().window_title_font(), TextAlignment::CenterLeft, text_color);
+        item_rect.shrink(item_padding(), 0);
+        Rect thumbnail_rect = { item_rect.location().translated(0, 5), { thumbnail_width(), thumbnail_height() } };
+        if (window.backing_store()) {
+            painter.draw_scaled_bitmap(thumbnail_rect, *window.backing_store(), window.backing_store()->rect());
+            StylePainter::paint_frame(painter, thumbnail_rect.inflated(4, 4), FrameShape::Container, FrameShadow::Sunken, 2);
+        }
+        Rect icon_rect = { thumbnail_rect.bottom_right().translated(-window.icon().width(), -window.icon().height()), { window.icon().width(), window.icon().height() } };
+        painter.fill_rect(icon_rect, Color::LightGray);
+        painter.blit(icon_rect.location(), window.icon(), window.icon().rect());
+        painter.draw_text(item_rect.translated(thumbnail_width() + 12, 0), window.title(), WSWindowManager::the().window_title_font(), TextAlignment::CenterLeft, text_color);
         painter.draw_text(item_rect, window.rect().to_string(), TextAlignment::CenterRight, rect_text_color);
     }
 }
 
 void WSWindowSwitcher::refresh()
 {
+    auto& wm = WSWindowManager::the();
     WSWindow* selected_window = nullptr;
     if (m_selected_index > 0 && m_windows[m_selected_index])
         selected_window = m_windows[m_selected_index].ptr();
+    if (!selected_window)
+        selected_window = wm.highlight_window() ? wm.highlight_window() : wm.active_window();
     m_windows.clear();
     m_selected_index = 0;
     int window_count = 0;
     int longest_title_width = 0;
-    WSWindowManager::the().for_each_visible_window_of_type_from_back_to_front(WSWindowType::Normal, [&] (WSWindow& window) {
+    wm.for_each_visible_window_of_type_from_front_to_back(WSWindowType::Normal, [&] (WSWindow& window) {
         ++window_count;
-        longest_title_width = max(longest_title_width, WSWindowManager::the().font().width(window.title()));
+        longest_title_width = max(longest_title_width, wm.font().width(window.title()));
         if (selected_window == &window)
             m_selected_index = m_windows.size();
         m_windows.append(window.make_weak_ptr());
         return IterationDecision::Continue;
-    });
+    }, true);
     if (m_windows.is_empty()) {
         hide();
         return;
     }
     int space_for_window_rect = 180;
-    m_rect.set_width(longest_title_width + space_for_window_rect + padding() * 2);
+    m_rect.set_width(thumbnail_width() + longest_title_width + space_for_window_rect + padding() * 2 + item_padding() * 2);
     m_rect.set_height(window_count * item_height() + padding() * 2);
-    m_rect.center_within(WSWindowManager::the().m_screen_rect);
+    m_rect.center_within(wm.m_screen_rect);
     if (!m_switcher_window)
         m_switcher_window = make<WSWindow>(*this, WSWindowType::WindowSwitcher);
     m_switcher_window->set_rect(m_rect);
     draw();
 }
 
-void WSWindowSwitcher::on_message(WSMessage&)
+void WSWindowSwitcher::refresh_if_needed()
 {
+    if (m_visible) {
+        refresh();
+        WSWindowManager::the().invalidate(m_rect);
+    }
 }

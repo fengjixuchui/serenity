@@ -5,6 +5,7 @@
 #include "Rect.h"
 #include "Size.h"
 #include <SharedGraphics/TextAlignment.h>
+#include <SharedGraphics/TextElision.h>
 #include <AK/AKString.h>
 
 class CharacterBitmap;
@@ -12,16 +13,8 @@ class GlyphBitmap;
 class GraphicsBitmap;
 class Font;
 
-#ifdef USERLAND
-class GWidget;
-class GWindow;
-#endif
-
 class Painter {
 public:
-#ifdef USERLAND
-    explicit Painter(GWidget&);
-#endif
     explicit Painter(GraphicsBitmap&);
     ~Painter();
     void fill_rect(const Rect&, Color);
@@ -31,15 +24,14 @@ public:
     void draw_bitmap(const Point&, const GlyphBitmap&, Color = Color());
     void set_pixel(const Point&, Color);
     void draw_line(const Point&, const Point&, Color);
-    void draw_focus_rect(const Rect&);
     void draw_scaled_bitmap(const Rect& dst_rect, const GraphicsBitmap&, const Rect& src_rect);
-    void blit(const Point&, const GraphicsBitmap&, const Rect& src_rect);
-    void blit_with_opacity(const Point&, const GraphicsBitmap&, const Rect& src_rect, float opacity);
+    void blit(const Point&, const GraphicsBitmap&, const Rect& src_rect, float opacity = 1.0f);
+    void blit_dimmed(const Point&, const GraphicsBitmap&, const Rect& src_rect);
 
-    void draw_text(const Rect&, const char* text, int length, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black);
-    void draw_text(const Rect&, const char* text, int length, TextAlignment = TextAlignment::TopLeft, Color = Color::Black);
-    void draw_text(const Rect&, const String&, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black);
-    void draw_text(const Rect&, const String&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black);
+    void draw_text(const Rect&, const char* text, int length, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
+    void draw_text(const Rect&, const char* text, int length, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
+    void draw_text(const Rect&, const String&, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
+    void draw_text(const Rect&, const String&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
     void draw_glyph(const Point&, char, Color);
     void draw_glyph(const Point&, char, const Font&, Color);
 
@@ -50,7 +42,7 @@ public:
     void set_draw_op(DrawOp op) { state().draw_op = op; }
     DrawOp draw_op() const { return state().draw_op; }
 
-    void set_clip_rect(const Rect& rect);
+    void add_clip_rect(const Rect& rect);
     void clear_clip_rect();
     Rect clip_rect() const { return state().clip_rect; }
 
@@ -64,10 +56,11 @@ public:
     void save() { m_state_stack.append(m_state_stack.last()); }
     void restore() { ASSERT(m_state_stack.size() > 1); m_state_stack.take_last(); }
 
-private:
+protected:
     void set_pixel_with_draw_op(dword& pixel, const Color&);
     void fill_rect_with_draw_op(const Rect&, Color);
     void blit_with_alpha(const Point&, const GraphicsBitmap&, const Rect& src_rect);
+    void blit_with_opacity(const Point&, const GraphicsBitmap&, const Rect& src_rect, float opacity);
 
     struct State {
         const Font* font;
@@ -80,23 +73,14 @@ private:
     const State& state() const { return m_state_stack.last(); }
 
     Rect m_clip_origin;
-    GWindow* m_window { nullptr };
     Retained<GraphicsBitmap> m_target;
-    Vector<State> m_state_stack;
+    Vector<State, 4> m_state_stack;
 };
 
 class PainterStateSaver {
 public:
-    PainterStateSaver(Painter& painter)
-        : m_painter(painter)
-    {
-        m_painter.save();
-    }
-
-    ~PainterStateSaver()
-    {
-        m_painter.restore();
-    }
+    explicit PainterStateSaver(Painter&);
+    ~PainterStateSaver();
 
 private:
     Painter& m_painter;

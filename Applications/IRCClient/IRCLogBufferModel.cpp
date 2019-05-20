@@ -13,12 +13,12 @@ IRCLogBufferModel::~IRCLogBufferModel()
 {
 }
 
-int IRCLogBufferModel::row_count() const
+int IRCLogBufferModel::row_count(const GModelIndex&) const
 {
     return m_log_buffer->count();
 }
 
-int IRCLogBufferModel::column_count() const
+int IRCLogBufferModel::column_count(const GModelIndex&) const
 {
     return Column::__Count;
 }
@@ -71,8 +71,4 @@ GVariant IRCLogBufferModel::data(const GModelIndex& index, Role role) const
 void IRCLogBufferModel::update()
 {
     did_update();
-}
-
-void IRCLogBufferModel::activate(const GModelIndex&)
-{
 }

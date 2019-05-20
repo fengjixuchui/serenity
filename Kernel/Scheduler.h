@@ -1,6 +1,7 @@
 #pragma once
 
 #include <AK/Assertions.h>
+#include <AK/Types.h>
 
 class Process;
 class Thread;
@@ -9,6 +10,7 @@ struct RegisterDump;
 extern Thread* current;
 extern Thread* g_last_fpu_thread;
 extern Thread* g_finalizer;
+extern qword g_uptime;
 
 class Scheduler {
 public:
@@ -23,6 +25,7 @@ public:
     static void prepare_to_modify_tss(Thread&);
     static Process* colonel();
     static bool is_active();
+    static void beep();
 private:
     static void prepare_for_iret_to_new_process();
 };

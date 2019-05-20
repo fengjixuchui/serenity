@@ -1,41 +1,41 @@
-#include "types.h"
+#include <AK/Types.h>
 #include "kmalloc.h"
 #include "i386.h"
 #include "i8253.h"
-#include "KeyboardDevice.h"
+#include <Kernel/Devices/KeyboardDevice.h>
 #include "Process.h"
-#include "system.h"
 #include "PIC.h"
-#include "IDEDiskDevice.h"
+#include <Kernel/Devices/IDEDiskDevice.h>
 #include "KSyms.h"
-#include <Kernel/NullDevice.h>
-#include <Kernel/ZeroDevice.h>
-#include <Kernel/FullDevice.h>
-#include <Kernel/RandomDevice.h>
-#include <Kernel/Ext2FileSystem.h>
-#include <Kernel/VirtualFileSystem.h>
-#include "MemoryManager.h"
-#include "ProcFS.h"
+#include <Kernel/Devices/NullDevice.h>
+#include <Kernel/Devices/ZeroDevice.h>
+#include <Kernel/Devices/FullDevice.h>
+#include <Kernel/Devices/RandomDevice.h>
+#include <Kernel/FileSystem/Ext2FileSystem.h>
+#include <Kernel/FileSystem/VirtualFileSystem.h>
+#include <Kernel/VM/MemoryManager.h>
+#include <Kernel/FileSystem/ProcFS.h>
 #include "RTC.h"
-#include "VirtualConsole.h"
+#include <Kernel/TTY/VirtualConsole.h>
 #include "Scheduler.h"
-#include "PS2MouseDevice.h"
-#include "PTYMultiplexer.h"
-#include "DevPtsFS.h"
-#include "BXVGADevice.h"
-#include "E1000NetworkAdapter.h"
-#include <Kernel/NetworkTask.h>
+#include <Kernel/Devices/PS2MouseDevice.h>
+#include <Kernel/TTY/PTYMultiplexer.h>
+#include <Kernel/FileSystem/DevPtsFS.h>
+#include <Kernel/Devices/BXVGADevice.h>
+#include <Kernel/Net/E1000NetworkAdapter.h>
+#include <Kernel/Net/NetworkTask.h>
+#include <Kernel/Devices/DebugLogDevice.h>
 
+#define SPAWN_TERMINAL
 //#define SPAWN_LAUNCHER
 //#define SPAWN_GUITEST2
-#define SPAWN_FILE_MANAGER
+//#define SPAWN_FILE_MANAGER
 //#define SPAWN_PROCESS_MANAGER
 //#define SPAWN_TEXT_EDITOR
 //#define SPAWN_FONTEDITOR
+//#define SPAWN_VISUAL_BUILDER
 //#define SPAWN_MULTIPLE_SHELLS
 //#define STRESS_TEST_SPAWNING
-
-system_t system;
 
 VirtualConsole* tty0;
 VirtualConsole* tty1;
@@ -43,6 +43,7 @@ VirtualConsole* tty2;
 VirtualConsole* tty3;
 KeyboardDevice* keyboard;
 PS2MouseDevice* ps2mouse;
+DebugLogDevice* dev_debuglog;
 NullDevice* dev_null;
 VFS* vfs;
 
@@ -99,13 +100,19 @@ VFS* vfs;
         hang();
     }
     window_server_process->set_priority(Process::HighPriority);
+    Process::create_user_process("/bin/Taskbar", (uid_t)100, (gid_t)100, (pid_t)0, error);
     //Process::create_user_process("/bin/sh", (uid_t)100, (gid_t)100, (pid_t)0, error, { }, move(environment), tty0);
+#ifdef SPAWN_TERMINAL
     Process::create_user_process("/bin/Terminal", (uid_t)100, (gid_t)100, (pid_t)0, error, { }, { }, tty0);
+#endif
 #ifdef SPAWN_GUITEST2
     Process::create_user_process("/bin/guitest2", (uid_t)100, (gid_t)100, (pid_t)0, error, { }, { }, tty0);
 #endif
 #ifdef SPAWN_LAUNCHER
     Process::create_user_process("/bin/Launcher", (uid_t)100, (gid_t)100, (pid_t)0, error, { }, { }, tty0);
+#endif
+#ifdef SPAWN_VISUAL_BUILDER
+    Process::create_user_process("/bin/VisualBuilder", (uid_t)100, (gid_t)100, (pid_t)0, error, { }, { }, tty0);
 #endif
 #ifdef SPAWN_FILE_MANAGER
     Process::create_user_process("/bin/FileManager", (uid_t)100, (gid_t)100, (pid_t)0, error, { }, { }, tty0);
@@ -136,14 +143,17 @@ VFS* vfs;
     ASSERT_NOT_REACHED();
 }
 
-[[noreturn]] void init()
+extern "C" [[noreturn]] void init()
 {
     cli();
+
+    sse_init();
 
     kmalloc_init();
     init_ksyms();
 
     vfs = new VFS;
+    dev_debuglog = new DebugLogDevice;
 
     auto console = make<Console>();
 

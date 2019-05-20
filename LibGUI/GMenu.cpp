@@ -29,14 +29,35 @@ GMenu::~GMenu()
     unrealize_menu();
 }
 
-void GMenu::add_action(Retained<GAction>&& action)
+void GMenu::add_action(Retained<GAction> action)
 {
-    m_items.append(make<GMenuItem>(move(action)));
+    m_items.append(make<GMenuItem>(m_menu_id, move(action)));
 }
 
 void GMenu::add_separator()
 {
-    m_items.append(make<GMenuItem>(GMenuItem::Separator));
+    m_items.append(make<GMenuItem>(m_menu_id, GMenuItem::Separator));
+}
+
+void GMenu::popup(const Point& screen_position)
+{
+    if (!m_menu_id)
+        realize_menu();
+    WSAPI_ClientMessage request;
+    request.type = WSAPI_ClientMessage::Type::PopupMenu;
+    request.menu.menu_id = m_menu_id;
+    request.menu.position = screen_position;
+    GEventLoop::post_message_to_server(request);
+}
+
+void GMenu::dismiss()
+{
+    if (!m_menu_id)
+        return;
+    WSAPI_ClientMessage request;
+    request.type = WSAPI_ClientMessage::Type::DismissMenu;
+    request.menu.menu_id = m_menu_id;
+    GEventLoop::post_message_to_server(request);
 }
 
 int GMenu::realize_menu()
@@ -52,6 +73,8 @@ int GMenu::realize_menu()
     ASSERT(m_menu_id > 0);
     for (int i = 0; i < m_items.size(); ++i) {
         auto& item = *m_items[i];
+        item.set_menu_id({ }, m_menu_id);
+        item.set_identifier({ }, i);
         if (item.type() == GMenuItem::Separator) {
             WSAPI_ClientMessage request;
             request.type = WSAPI_ClientMessage::Type::AddMenuSeparator;
@@ -65,6 +88,10 @@ int GMenu::realize_menu()
             request.type = WSAPI_ClientMessage::Type::AddMenuItem;
             request.menu.menu_id = m_menu_id;
             request.menu.identifier = i;
+            request.menu.enabled = action.is_enabled();
+            request.menu.checkable = action.is_checkable();
+            if (action.is_checkable())
+                request.menu.checked = action.is_checked();
             ASSERT(action.text().length() < (ssize_t)sizeof(request.text));
             strcpy(request.text, action.text().characters());
             request.text_length = action.text().length();

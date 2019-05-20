@@ -4,21 +4,23 @@
 #include <AK/HashMap.h>
 #include <AK/CircularQueue.h>
 #include <AK/Function.h>
-#include <LibGUI/GTCPSocket.h>
+#include <LibCore/CTCPSocket.h>
 #include "IRCLogBuffer.h"
 #include "IRCWindow.h"
 
 class IRCChannel;
 class IRCQuery;
 class IRCWindowListModel;
-class GNotifier;
+class CNotifier;
 
-class IRCClient final : public GObject {
+class IRCClient final : public CObject {
     friend class IRCChannel;
     friend class IRCQuery;
 public:
-    IRCClient(const String& address, int port = 6667);
+    IRCClient();
     virtual ~IRCClient() override;
+
+    void set_server(const String& hostname, int port = 6667);
 
     bool connect();
 
@@ -104,17 +106,18 @@ private:
     void handle_rpl_namreply(const Message&);
     void handle_privmsg(const Message&);
     void handle_nick(const Message&);
-    void handle(const Message&, const String& verbatim);
+    void handle(const Message&);
     void handle_user_command(const String&);
+
+    void on_socket_connected();
 
     String m_hostname;
     int m_port { 6667 };
 
-    GTCPSocket* m_socket { nullptr };
+    CTCPSocket* m_socket { nullptr };
 
     String m_nickname;
-    Vector<char> m_line_buffer;
-    OwnPtr<GNotifier> m_notifier;
+    OwnPtr<CNotifier> m_notifier;
     HashMap<String, RetainPtr<IRCChannel>> m_channels;
     HashMap<String, RetainPtr<IRCQuery>> m_queries;
 

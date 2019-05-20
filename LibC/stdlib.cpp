@@ -16,196 +16,27 @@
 
 extern "C" {
 
-#define MALLOC_SCRUB_BYTE 0x85
-#define FREE_SCRUB_BYTE 0x82
-
-struct MallocHeader {
-    uint16_t first_chunk_index;
-    uint16_t chunk_count : 15;
-    bool is_mmap : 1;
-    size_t size;
-
-    uint32_t compute_xorcheck() const
-    {
-        return 0x19820413 ^ ((first_chunk_index << 16) | chunk_count) ^ size;
-    }
-};
-
-struct MallocFooter {
-    uint32_t xorcheck;
-};
-
-#define CHUNK_SIZE  32
-#define POOL_SIZE   4 * 1048576
-
-static const size_t malloc_budget = POOL_SIZE;
-static byte s_malloc_map[POOL_SIZE / CHUNK_SIZE / 8];
-static byte* s_malloc_pool;
-
-static uint32_t s_malloc_sum_alloc = 0;
-static uint32_t s_malloc_sum_free = POOL_SIZE;
-
-void* malloc(size_t size)
-{
-    if (size == 0)
-        return nullptr;
-
-    // We need space for the MallocHeader structure at the head of the block.
-    size_t real_size = size + sizeof(MallocHeader) + sizeof(MallocFooter);
-
-    if (real_size >= PAGE_SIZE) {
-        auto* memory = mmap(nullptr, real_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
-        if (memory == MAP_FAILED) {
-            fprintf(stderr, "malloc() failed to mmap() for a %u-byte allocation: %s", size, strerror(errno));
-            volatile char* crashme = (char*)0xf007d00d;
-            *crashme = 0;
-            return nullptr;
-        }
-        auto* header = (MallocHeader*)(memory);
-        byte* ptr = ((byte*)header) + sizeof(MallocHeader);
-        header->chunk_count = 0;
-        header->first_chunk_index = 0;
-        header->size = real_size;
-        header->is_mmap = true;
-        return ptr;
-    }
-
-    if (s_malloc_sum_free < real_size) {
-        fprintf(stderr, "malloc(): Out of memory\ns_malloc_sum_free=%u, real_size=%u\n", s_malloc_sum_free, real_size);
-        assert(false);
-    }
-
-    size_t chunks_needed = real_size / CHUNK_SIZE;
-    if (real_size % CHUNK_SIZE)
-        chunks_needed++;
-
-    size_t chunks_here = 0;
-    size_t first_chunk = 0;
-
-    for (unsigned i = 0; i < (POOL_SIZE / CHUNK_SIZE / 8); ++i) {
-        if (s_malloc_map[i] == 0xff) {
-            // Skip over completely full bucket.
-            chunks_here = 0;
-            continue;
-        }
-
-        // FIXME: This scan can be optimized further with TZCNT.
-        for (unsigned j = 0; j < 8; ++j) {
-            if ((s_malloc_map[i] & (1<<j))) {
-                // This is in use, so restart chunks_here counter.
-                chunks_here = 0;
-                continue;
-            }
-            if (chunks_here == 0) {
-                // Mark where potential allocation starts.
-                first_chunk = i * 8 + j;
-            }
-
-            ++chunks_here;
-
-            if (chunks_here == chunks_needed) {
-                auto* header = (MallocHeader*)(s_malloc_pool + (first_chunk * CHUNK_SIZE));
-                byte* ptr = ((byte*)header) + sizeof(MallocHeader);
-                header->chunk_count = chunks_needed;
-                header->first_chunk_index = first_chunk;
-                header->is_mmap = false;
-                header->size = size;
-
-                auto* footer = (MallocFooter*)((byte*)header + (header->chunk_count * CHUNK_SIZE) - sizeof(MallocFooter));
-                footer->xorcheck = header->compute_xorcheck();
-
-                for (size_t k = first_chunk; k < (first_chunk + chunks_needed); ++k)
-                    s_malloc_map[k / 8] |= 1 << (k % 8);
-
-                s_malloc_sum_alloc += header->chunk_count * CHUNK_SIZE;
-                s_malloc_sum_free  -= header->chunk_count * CHUNK_SIZE;
-
-                memset(ptr, MALLOC_SCRUB_BYTE, (header->chunk_count * CHUNK_SIZE) - (sizeof(MallocHeader) + sizeof(MallocFooter)));
-                return ptr;
-            }
-        }
-    }
-
-    fprintf(stderr, "malloc(): Out of memory (no consecutive chunks found for size %u)\n", size);
-    volatile char* crashme = (char*)0xc007d00d;
-    *crashme = 0;
-    return nullptr;
-}
-
-static void validate_mallocation(void* ptr, const char* func)
-{
-    auto* header = (MallocHeader*)((((byte*)ptr) - sizeof(MallocHeader)));
-    if (header->size == 0) {
-        fprintf(stderr, "%s called on bad pointer %p, size=0\n", func, ptr);
-        assert(false);
-    }
-    auto* footer = (MallocFooter*)((byte*)header + (header->chunk_count * CHUNK_SIZE) - sizeof(MallocFooter));
-    uint32_t expected_xorcheck = header->compute_xorcheck();
-    if (footer->xorcheck != expected_xorcheck) {
-        fprintf(stderr, "%s called on bad pointer %p, xorcheck=%w (expected %w)\n", func, ptr, footer->xorcheck, expected_xorcheck);
-        assert(false);
-    }
-}
-
-void free(void* ptr)
-{
-    if (!ptr)
-        return;
-
-    auto* header = (MallocHeader*)((((byte*)ptr) - sizeof(MallocHeader)));
-    if (header->is_mmap) {
-        int rc = munmap(header, header->size);
-        if (rc < 0)
-            fprintf(stderr, "free(): munmap(%p) for allocation %p with size %u failed: %s\n", header, ptr, header->size, strerror(errno));
-        return;
-    }
-
-    validate_mallocation(ptr, "free()");
-    for (unsigned i = header->first_chunk_index; i < (header->first_chunk_index + header->chunk_count); ++i)
-        s_malloc_map[i / 8] &= ~(1 << (i % 8));
-
-    s_malloc_sum_alloc -= header->chunk_count * CHUNK_SIZE;
-    s_malloc_sum_free += header->chunk_count * CHUNK_SIZE;
-
-    memset(header, FREE_SCRUB_BYTE, header->chunk_count * CHUNK_SIZE);
-}
-
-void __malloc_init()
-{
-    s_malloc_pool = (byte*)mmap(nullptr, malloc_budget, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
-    int rc = set_mmap_name(s_malloc_pool, malloc_budget, "malloc pool");
-    if (rc < 0)
-        perror("set_mmap_name failed");
-}
-
-void* calloc(size_t count, size_t size)
-{
-    size_t new_size = count * size;
-    auto* ptr = malloc(new_size);
-    memset(ptr, 0, new_size);
-    return ptr;
-}
-
-void* realloc(void *ptr, size_t size)
-{
-    if (!ptr)
-        return malloc(size);
-    validate_mallocation(ptr, "realloc()");
-    auto* header = (MallocHeader*)((((byte*)ptr) - sizeof(MallocHeader)));
-    size_t old_size = header->size;
-    if (size == old_size)
-        return ptr;
-    auto* new_ptr = malloc(size);
-    memcpy(new_ptr, ptr, min(old_size, size));
-    free(ptr);
-    return new_ptr;
-}
+typedef void(*__atexit_handler)();
+static int __atexit_handler_count = 0;
+static __atexit_handler __atexit_handlers[32];
 
 void exit(int status)
 {
+    for (int i = 0; i < __atexit_handler_count; ++i)
+        __atexit_handlers[i]();
+    extern void _fini();
+    _fini();
     _exit(status);
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
+
+int atexit(void (*handler)())
+{
+    ASSERT(__atexit_handler_count < 32);
+    __atexit_handlers[__atexit_handler_count++] = handler;
+    return 0;
+}
+
 
 void abort()
 {
@@ -215,67 +46,96 @@ void abort()
 
 char* getenv(const char* name)
 {
+    size_t vl = strlen(name);
     for (size_t i = 0; environ[i]; ++i) {
         const char* decl = environ[i];
         char* eq = strchr(decl, '=');
         if (!eq)
             continue;
         size_t varLength = eq - decl;
-        char* var = (char*)alloca(varLength + 1);
-        memcpy(var, decl, varLength);
-        var[varLength] = '\0';
-        if (!strcmp(var, name)) {
-            char* value = eq + 1;
-            return value;
+        if (vl != varLength)
+            continue;
+        if (strncmp(decl, name, varLength) == 0) {
+            return eq + 1;
         }
     }
     return nullptr;
 }
 
+int unsetenv(const char* name)
+{
+    auto new_var_len = strlen(name);
+    size_t environ_size = 0;
+    size_t skip = -1;
+
+    for (; environ[environ_size]; ++environ_size) {
+        char* old_var = environ[environ_size];
+        char* old_eq = strchr(old_var, '=');
+        ASSERT(old_eq);
+        auto old_var_len = old_eq - old_var;
+
+        if (new_var_len != old_var_len)
+            continue; // can't match
+
+        if (strncmp(name, old_var, new_var_len) == 0)
+            skip = environ_size;
+    }
+
+    if (skip == -1)
+        return 0; // not found: no failure.
+
+    // Shuffle the existing array down by one.
+    memmove(&environ[skip], &environ[skip+1], ((environ_size-1)-skip) * sizeof(environ[0]));
+    environ[environ_size-1] = nullptr;
+    return 0;
+}
+
 int putenv(char* new_var)
 {
-    HashMap<String, String> environment;
+    char* new_eq = strchr(new_var, '=');
 
-    auto handle_environment_entry = [&environment] (const char* decl) {
-        char* eq = strchr(decl, '=');
-        if (!eq)
-            return;
-        size_t var_length = eq - decl;
-        char* var = (char*)alloca(var_length + 1);
-        memcpy(var, decl, var_length);
-        var[var_length] = '\0';
-        const char* value = eq + 1;
-        environment.set(var, value);
-    };
-    for (size_t i = 0; environ[i]; ++i)
-        handle_environment_entry(environ[i]);
-    handle_environment_entry(new_var);
+    if (!new_eq)
+        return unsetenv(new_var);
 
-    //extern bool __environ_is_malloced;
-    //if (__environ_is_malloced)
-    //    free(environ);
-    //__environ_is_malloced = true;
+    auto new_var_len = new_eq - new_var;
+    size_t environ_size = 0;
+    for (; environ[environ_size]; ++environ_size) {
+        char* old_var = environ[environ_size];
+        char* old_eq = strchr(old_var, '=');
+        ASSERT(old_eq);
+        auto old_var_len = old_eq - old_var;
 
-    int environment_size = sizeof(char*); // For the null sentinel.
-    for (auto& it : environment)
-        environment_size += (int)sizeof(char*) + it.key.length() + 1 + it.value.length() + 1;
+        if (new_var_len != old_var_len)
+            continue; // can't match
 
-    char* buffer = (char*)malloc(environment_size);
-    environ = (char**)buffer;
-    char* bufptr = buffer + sizeof(char*) * (environment.size() + 1);
-
-    int i = 0;
-    for (auto& it : environment) {
-        environ[i] = bufptr;
-        memcpy(bufptr, it.key.characters(), it.key.length());
-        bufptr += it.key.length();
-        *(bufptr++) = '=';
-        memcpy(bufptr, it.value.characters(), it.value.length());
-        bufptr += it.value.length();
-        *(bufptr++) = '\0';
-        ++i;
+        if (strncmp(new_var, old_var, new_var_len) == 0) {
+            environ[environ_size] = new_var;
+            return 0;
+        }
     }
-    environ[environment.size()] = nullptr;
+
+    // At this point, we need to append the new var.
+    // 2 here: one for the new var, one for the sentinel value.
+    char **new_environ = (char**)malloc((environ_size + 2) * sizeof(char*));
+    if (new_environ == nullptr) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    for (size_t i = 0; environ[i]; ++i) {
+        new_environ[i] = environ[i];
+    }
+
+    new_environ[environ_size] = new_var;
+    new_environ[environ_size + 1] = nullptr;
+
+    // swap new and old
+    // note that the initial environ is not heap allocated!
+    extern bool __environ_is_malloced;
+    if (__environ_is_malloced)
+        free(environ);
+    __environ_is_malloced = true;
+    environ = new_environ;
     return 0;
 }
 
@@ -284,13 +144,21 @@ double strtod(const char* str, char** endptr)
     (void)str;
     (void)endptr;
     dbgprintf("LibC: strtod: '%s'\n", str);
-    assert(false);
+    ASSERT_NOT_REACHED();
+}
+
+float strtof(const char* str, char** endptr)
+{
+    (void)str;
+    (void)endptr;
+    dbgprintf("LibC: strtof: '%s'\n", str);
+    ASSERT_NOT_REACHED();
 }
 
 double atof(const char* str)
 {
     dbgprintf("LibC: atof: '%s'\n", str);
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 int atoi(const char* str)
@@ -367,7 +235,16 @@ void srandom(unsigned seed)
 
 int system(const char* command)
 {
-    return execl("/bin/sh", "sh", "-c", command, nullptr);
+    auto child = fork();
+    if (!child) {
+        int rc = execl("/bin/sh", "sh", "-c", command, nullptr);
+        if (rc < 0)
+            perror("execl");
+        exit(0);
+    }
+    int wstatus;
+    waitpid(child, &wstatus, 0);
+    return WEXITSTATUS(wstatus);
 }
 
 char* mktemp(char* pattern)
@@ -422,13 +299,7 @@ ldiv_t ldiv(long numerator, long denominator)
 
 size_t mbstowcs(wchar_t*, const char*, size_t)
 {
-    assert(false);
-}
-
-int atexit(void (*function)())
-{
-    (void)function;
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 long strtol(const char* str, char** endptr, int base)
@@ -484,15 +355,15 @@ long strtol(const char* str, char** endptr, int base)
     } else if (neg)
         acc = -acc;
     if (endptr)
-        *endptr = (char*)(any ? s - 1 : str);
+        *endptr = const_cast<char*>((any ? s - 1 : str));
     return acc;
 }
 
-unsigned long strtoul(const char*, char** endptr, int base)
+unsigned long strtoul(const char* str, char** endptr, int base)
 {
-    (void)endptr;
-    (void)base;
-    assert(false);
+    auto value = strtol(str, endptr, base);
+    ASSERT(value >= 0);
+    return value;
 }
 
 }

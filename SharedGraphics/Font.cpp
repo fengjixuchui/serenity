@@ -2,7 +2,7 @@
 #include <AK/kmalloc.h>
 #include <AK/BufferStream.h>
 #include <AK/StdLibExtras.h>
-
+#include <AK/MappedFile.h>
 #include <LibC/unistd.h>
 #include <LibC/stdio.h>
 #include <LibC/fcntl.h>
@@ -90,10 +90,6 @@ Font::Font(const String& name, unsigned* rows, byte* widths, bool is_fixed_width
 
 Font::~Font()
 {
-    if (m_mmap_ptr) {
-        int rc = munmap(m_mmap_ptr, 4096 * 3);
-        ASSERT(rc == 0);
-    }
 }
 
 RetainPtr<Font> Font::load_from_memory(const byte* data)
@@ -119,31 +115,18 @@ RetainPtr<Font> Font::load_from_memory(const byte* data)
 
 RetainPtr<Font> Font::load_from_file(const String& path)
 {
-    int fd = open(path.characters(), O_RDONLY, 0644);
-    if (fd < 0) {
-        dbgprintf("open(%s) got fd=%d, failed: %s\n", path.characters(), fd, strerror(errno));
-        perror("open");
+    MappedFile mapped_file(path);
+    if (!mapped_file.is_valid())
         return nullptr;
-    }
 
-    auto* mapped_file = (byte*)mmap(nullptr, 4096 * 3, PROT_READ, MAP_SHARED, fd, 0);
-    if (mapped_file == MAP_FAILED) {
-        int rc = close(fd);
-        ASSERT(rc == 0);
-        return nullptr;
-    }
-
-    auto font = load_from_memory(mapped_file);
-    font->m_mmap_ptr = mapped_file;
-
-    int rc = close(fd);
-    ASSERT(rc == 0);
+    auto font = load_from_memory((const byte*)mapped_file.pointer());
+    font->m_mapped_file = move(mapped_file);
     return font;
 }
 
 bool Font::write_to_file(const String& path)
 {
-    int fd = open(path.characters(), O_WRONLY | O_CREAT, 0644);
+    int fd = creat(path.characters(), 0644);
     if (fd < 0) {
         perror("open");
         return false;
@@ -177,15 +160,20 @@ bool Font::write_to_file(const String& path)
 
 int Font::width(const String& string) const
 {
-    if (string.is_empty())
+    return width(string.characters(), string.length());
+}
+
+int Font::width(const char* characters, int length) const
+{
+    if (!length)
         return 0;
 
     if (m_fixed_width)
-        return string.length() * m_glyph_width;
+        return length * m_glyph_width;
 
     int width = 0;
-    for (int i = 0; i < string.length(); ++i)
-        width += glyph_width(string[i]) + 1;
+    for (int i = 0; i < length; ++i)
+        width += glyph_width(characters[i]) + 1;
 
     return width - 1;
 }

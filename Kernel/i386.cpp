@@ -1,30 +1,30 @@
-#include "types.h"
-#include "kmalloc.h"
+#include <AK/Types.h>
 #include "i386.h"
 #include "Assertions.h"
 #include "Process.h"
-#include "MemoryManager.h"
+#include <Kernel/VM/MemoryManager.h>
 #include "IRQHandler.h"
 #include "PIC.h"
 #include "Scheduler.h"
+#include <Kernel/KSyms.h>
 
 //#define PAGE_FAULT_DEBUG
 
 struct [[gnu::packed]] DescriptorTablePointer {
-    word size;
+    word limit;
     void* address;
 };
 
 static DescriptorTablePointer s_idtr;
 static DescriptorTablePointer s_gdtr;
-static Descriptor* s_idt;
-static Descriptor* s_gdt;
+static Descriptor s_idt[256];
+static Descriptor s_gdt[256];
 
-static IRQHandler** s_irq_handler;
+static IRQHandler* s_irq_handler[16];
 
 static Vector<word>* s_gdt_freelist;
 
-static word s_gdtLength;
+static word s_gdt_length;
 
 word gdt_alloc_entry()
 {
@@ -190,14 +190,14 @@ void exception_7_handler(RegisterDump& regs)
     if (g_last_fpu_thread == current)
         return;
     if (g_last_fpu_thread) {
-        asm volatile("fnsave %0":"=m"(g_last_fpu_thread->fpu_state()));
+        asm volatile("fxsave %0":"=m"(g_last_fpu_thread->fpu_state()));
     } else {
         asm volatile("fnclex");
     }
     g_last_fpu_thread = current;
 
     if (current->has_used_fpu()) {
-        asm volatile("frstor %0"::"m"(current->fpu_state()));
+        asm volatile("fxrstor %0"::"m"(current->fpu_state()));
     } else {
         asm volatile("fninit");
         current->set_has_used_fpu(true);
@@ -322,9 +322,8 @@ static void write_raw_gdt_entry(word selector, dword low, dword high)
     s_gdt[i].low = low;
     s_gdt[i].high = high;
 
-    if (i > s_gdtLength) {
-        s_gdtr.size = (s_gdtLength + 1) * 8;
-    }
+    if (i > s_gdt_length)
+        s_gdtr.limit = (s_gdt_length + 1) * 8 - 1;
 }
 
 void write_gdt_entry(word selector, Descriptor& descriptor)
@@ -341,23 +340,22 @@ Descriptor& get_gdt_entry(word selector)
 void flush_gdt()
 {
     s_gdtr.address = s_gdt;
-    s_gdtr.size = (s_gdtLength * 8) - 1;
-    asm("lgdt %0"::"m"(s_gdtr));
+    s_gdtr.limit = (s_gdt_length * 8) - 1;
+    asm("lgdt %0"::"m"(s_gdtr):"memory");
 }
 
 void gdt_init()
 {
-    s_gdt = static_cast<Descriptor*>(kmalloc_eternal(sizeof(Descriptor) * 256));
-    s_gdtLength = 5;
+    s_gdt_length = 5;
 
     s_gdt_freelist = new Vector<word>();
     s_gdt_freelist->ensure_capacity(256);
-    for (size_t i = s_gdtLength; i < 256; ++i)
+    for (size_t i = s_gdt_length; i < 256; ++i)
         s_gdt_freelist->append(i * 8);
 
-    s_gdtLength = 256;
+    s_gdt_length = 256;
     s_gdtr.address = s_gdt;
-    s_gdtr.size = (s_gdtLength * 8) - 1;
+    s_gdtr.limit = (s_gdt_length * 8) - 1;
 
     write_raw_gdt_entry(0x0000, 0x00000000, 0x00000000);
     write_raw_gdt_entry(0x0008, 0x0000ffff, 0x00cf9a00);
@@ -366,6 +364,22 @@ void gdt_init()
     write_raw_gdt_entry(0x0020, 0x0000ffff, 0x00cff200);
 
     flush_gdt();
+
+    asm volatile(
+        "mov %%ax, %%ds\n"
+        "mov %%ax, %%es\n"
+        "mov %%ax, %%fs\n"
+        "mov %%ax, %%gs\n"
+        "mov %%ax, %%ss\n"
+        :: "a"(0x10)
+        : "memory"
+    );
+
+    // Make sure CS points to the kernel code descriptor.
+    asm volatile(
+        "ljmpl $0x8, $sanity\n"
+        "sanity:\n"
+    );
 }
 
 static void unimp_trap()
@@ -420,10 +434,8 @@ asm(
 
 void idt_init()
 {
-    s_idt = static_cast<Descriptor*>(kmalloc_eternal(sizeof(Descriptor) * 256));
-
     s_idtr.address = s_idt;
-    s_idtr.size = 0x100 * 8;
+    s_idtr.limit = 0x100 * 8 - 1;
 
     for (byte i = 0xff; i > 0x10; --i)
         register_interrupt_handler(i, unimp_trap);
@@ -448,7 +460,6 @@ void idt_init()
 
     register_interrupt_handler(0x57, irq7_handler);
 
-    s_irq_handler = static_cast<IRQHandler**>(kmalloc_eternal(sizeof(IRQHandler*) * 16));
     for (byte i = 0; i < 16; ++i) {
         s_irq_handler[i] = nullptr;
     }
@@ -484,12 +495,26 @@ void handle_irq()
     PIC::eoi(irq);
 }
 
+#ifdef DEBUG
 void __assertion_failed(const char* msg, const char* file, unsigned line, const char* func)
 {
     asm volatile("cli");
     kprintf("ASSERTION FAILED: %s\n%s:%u in %s\n", msg, file, line, func);
-    extern void dump_backtrace(bool);
-    dump_backtrace(true);
+    dump_backtrace();
     asm volatile("hlt");
     for (;;);
+}
+#endif
+
+void sse_init()
+{
+    asm volatile(
+        "mov %cr0, %eax\n"
+        "andl $0xfffffffb, %eax\n"
+        "orl $0x2, %eax\n"
+        "mov %eax, %cr0\n"
+        "mov %cr4, %eax\n"
+        "orl $0x600, %eax\n"
+        "mov %eax, %cr4\n"
+    );
 }

@@ -1,15 +1,14 @@
 #pragma once
 
-#include "GWidget.h"
-#include <AK/AKString.h>
-#include <SharedGraphics/Painter.h>
+#include <LibGUI/GFrame.h>
+#include <SharedGraphics/TextAlignment.h>
 
 class GraphicsBitmap;
 
-class GLabel final : public GWidget {
+class GLabel : public GFrame {
 public:
-    explicit GLabel(GWidget* parent);
-    GLabel(const String& text, GWidget* parent);
+    explicit GLabel(GWidget* parent = nullptr);
+    GLabel(const String& text, GWidget* parent = nullptr);
     virtual ~GLabel() override;
 
     String text() const { return m_text; }

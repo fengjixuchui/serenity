@@ -3,20 +3,19 @@
 #include <LibGUI/GSortingProxyModel.h>
 #include <stdio.h>
 
-ProcessTableView::ProcessTableView(GWidget* parent)
+ProcessTableView::ProcessTableView(GraphWidget& graph, GWidget* parent)
     : GTableView(parent)
 {
-    set_model(GSortingProxyModel::create(ProcessModel::create()));
+    set_model(GSortingProxyModel::create(ProcessModel::create(graph)));
     model()->set_key_column_and_sort_order(ProcessModel::Column::CPU, GSortOrder::Descending);
-    start_timer(1000);
-    model()->update();
+    refresh();
 }
 
 ProcessTableView::~ProcessTableView()
 {
 }
 
-void ProcessTableView::timer_event(GTimerEvent&)
+void ProcessTableView::refresh()
 {
     model()->update();
 }
@@ -33,5 +32,5 @@ pid_t ProcessTableView::selected_pid() const
 {
     if (!model()->selected_index().is_valid())
         return -1;
-    return model()->data({ model()->selected_index().row(), ProcessModel::Column::PID }, GModel::Role::Sort).as_int();
+    return model()->data(model()->index(model()->selected_index().row(), ProcessModel::Column::PID), GModel::Role::Sort).as_int();
 }

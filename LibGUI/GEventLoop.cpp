@@ -1,11 +1,13 @@
+#include <LibCore/CObject.h>
 #include "GEventLoop.h"
 #include "GEvent.h"
-#include "GObject.h"
 #include "GWindow.h"
 #include <LibGUI/GApplication.h>
 #include <LibGUI/GAction.h>
-#include <LibGUI/GNotifier.h>
+#include <LibCore/CNotifier.h>
 #include <LibGUI/GMenu.h>
+#include <LibGUI/GDesktop.h>
+#include <LibGUI/GWidget.h>
 #include <LibC/unistd.h>
 #include <LibC/stdio.h>
 #include <LibC/fcntl.h>
@@ -13,26 +15,24 @@
 #include <LibC/time.h>
 #include <LibC/sys/select.h>
 #include <LibC/sys/socket.h>
+#include <LibC/sys/time.h>
 #include <LibC/errno.h>
 #include <LibC/string.h>
 #include <LibC/stdlib.h>
+#include <sys/uio.h>
 
 //#define GEVENTLOOP_DEBUG
+//#define COALESCING_DEBUG
 
-static HashMap<GShortcut, GAction*>* g_actions;
-static GEventLoop* s_main_event_loop;
-static Vector<GEventLoop*>* s_event_loop_stack;
-int GEventLoop::s_event_fd = -1;
+int GEventLoop::s_windowserver_fd = -1;
+int GEventLoop::s_my_client_id = -1;
 pid_t GEventLoop::s_server_pid = -1;
-HashMap<int, OwnPtr<GEventLoop::EventLoopTimer>>* GEventLoop::s_timers;
-HashTable<GNotifier*>* GEventLoop::s_notifiers;
-int GEventLoop::s_next_timer_id = 1;
 
 void GEventLoop::connect_to_server()
 {
-    ASSERT(s_event_fd == -1);
-    s_event_fd = socket(AF_LOCAL, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-    if (s_event_fd < 0) {
+    ASSERT(s_windowserver_fd == -1);
+    s_windowserver_fd = socket(AF_LOCAL, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s_windowserver_fd < 0) {
         perror("socket");
         ASSERT_NOT_REACHED();
     }
@@ -44,7 +44,7 @@ void GEventLoop::connect_to_server()
     int retries = 1000;
     int rc = 0;
     while (retries) {
-        rc = connect(s_event_fd, (const sockaddr*)&address, sizeof(address));
+        rc = connect(s_windowserver_fd, (const sockaddr*)&address, sizeof(address));
         if (rc == 0)
             break;
 #ifdef GEVENTLOOP_DEBUG
@@ -61,25 +61,16 @@ void GEventLoop::connect_to_server()
     request.type = WSAPI_ClientMessage::Type::Greeting;
     request.greeting.client_pid = getpid();
     auto response = sync_request(request, WSAPI_ServerMessage::Type::Greeting);
-    s_server_pid = response.greeting.server_pid;
+    handle_greeting(response);
 }
 
 GEventLoop::GEventLoop()
 {
-    if (!s_event_loop_stack) {
-        s_event_loop_stack = new Vector<GEventLoop*>;
-        s_timers = new HashMap<int, OwnPtr<GEventLoop::EventLoopTimer>>;
-        s_notifiers = new HashTable<GNotifier*>;
-    }
-
-    if (!s_main_event_loop) {
-        s_main_event_loop = this;
-        s_event_loop_stack->append(this);
+    static bool connected = false;
+    if (!connected) {
         connect_to_server();
+        connected = true;
     }
-
-    if (!g_actions)
-        g_actions = new HashMap<GShortcut, GAction*>;
 
 #ifdef GEVENTLOOP_DEBUG
     dbgprintf("(%u) GEventLoop constructed :)\n", getpid());
@@ -90,100 +81,20 @@ GEventLoop::~GEventLoop()
 {
 }
 
-GEventLoop& GEventLoop::main()
-{
-    ASSERT(s_main_event_loop);
-    return *s_main_event_loop;
-}
-
-GEventLoop& GEventLoop::current()
-{
-    return *s_event_loop_stack->last();
-}
-
-void GEventLoop::quit(int code)
-{
-    m_exit_requested = true;
-    m_exit_code = code;
-}
-
-struct GEventLoopPusher {
-public:
-    GEventLoopPusher(GEventLoop& event_loop) : m_event_loop(event_loop)
-    {
-        if (&m_event_loop != s_main_event_loop) {
-            m_event_loop.take_pending_events_from(GEventLoop::current());
-            s_event_loop_stack->append(&event_loop);
-        }
-    }
-    ~GEventLoopPusher()
-    {
-        if (&m_event_loop != s_main_event_loop) {
-            s_event_loop_stack->take_last();
-            GEventLoop::current().take_pending_events_from(m_event_loop);
-        }
-    }
-private:
-    GEventLoop& m_event_loop;
-};
-
-int GEventLoop::exec()
-{
-    GEventLoopPusher pusher(*this);
-
-    m_running = true;
-    for (;;) {
-        if (m_exit_requested)
-            return m_exit_code;
-        process_unprocessed_messages();
-        if (m_queued_events.is_empty()) {
-            wait_for_event();
-            process_unprocessed_messages();
-        }
-        Vector<QueuedEvent> events = move(m_queued_events);
-        for (auto& queued_event : events) {
-            auto* receiver = queued_event.receiver.ptr();
-            auto& event = *queued_event.event;
-#ifdef GEVENTLOOP_DEBUG
-            dbgprintf("GEventLoop: %s{%p} event %u\n", receiver->class_name(), receiver, (unsigned)event.type());
-#endif
-            if (!receiver) {
-                switch (event.type()) {
-                case GEvent::Quit:
-                    ASSERT_NOT_REACHED();
-                    return 0;
-                default:
-                    dbgprintf("Event type %u with no receiver :(\n", event.type());
-                }
-            } else {
-                receiver->event(event);
-            }
-
-            if (m_exit_requested) {
-                auto rejigged_event_queue = move(events);
-                rejigged_event_queue.append(move(m_queued_events));
-                m_queued_events = move(rejigged_event_queue);
-                return m_exit_code;
-            }
-        }
-    }
-    ASSERT_NOT_REACHED();
-}
-
-void GEventLoop::post_event(GObject& receiver, OwnPtr<GEvent>&& event)
-{
-#ifdef GEVENTLOOP_DEBUG
-    dbgprintf("GEventLoop::post_event: {%u} << receiver=%p, event=%p\n", m_queued_events.size(), &receiver, event.ptr());
-#endif
-    m_queued_events.append({ receiver.make_weak_ptr(), move(event) });
-}
-
-void GEventLoop::handle_paint_event(const WSAPI_ServerMessage& event, GWindow& window)
+void GEventLoop::handle_paint_event(const WSAPI_ServerMessage& event, GWindow& window, const ByteBuffer& extra_data)
 {
 #ifdef GEVENTLOOP_DEBUG
     dbgprintf("WID=%x Paint [%d,%d %dx%d]\n", event.window_id, event.paint.rect.location.x, event.paint.rect.location.y, event.paint.rect.size.width, event.paint.rect.size.height);
 #endif
-    post_event(window, make<GPaintEvent>(event.paint.rect, event.paint.window_size));
+    Vector<Rect, 32> rects;
+    for (int i = 0; i < min(WSAPI_ServerMessage::max_inline_rect_count, event.rect_count); ++i)
+        rects.append(event.rects[i]);
+    if (event.extra_size) {
+        auto* extra_rects = reinterpret_cast<const WSAPI_Rect*>(extra_data.data());
+        for (int i = 0; i < event.rect_count - WSAPI_ServerMessage::max_inline_rect_count; ++i)
+            rects.append(extra_rects[i]);
+    }
+    post_event(window, make<GMultiPaintEvent>(rects, event.paint.window_size));
 }
 
 void GEventLoop::handle_resize_event(const WSAPI_ServerMessage& event, GWindow& window)
@@ -219,9 +130,20 @@ void GEventLoop::handle_key_event(const WSAPI_ServerMessage& event, GWindow& win
         key_event->m_text = String(&event.key.character, 1);
 
     if (event.type == WSAPI_ServerMessage::Type::KeyDown) {
+        if (auto* focused_widget = window.focused_widget()) {
+            if (auto* action = focused_widget->action_for_key_event(*key_event)) {
+                if (action->is_enabled()) {
+                    action->activate();
+                    return;
+                }
+            }
+        }
+
         if (auto* action = GApplication::the().action_for_key_event(*key_event)) {
-            action->activate();
-            return;
+            if (action->is_enabled()) {
+                action->activate();
+                return;
+            }
         }
     }
     post_event(window, move(key_event));
@@ -230,13 +152,15 @@ void GEventLoop::handle_key_event(const WSAPI_ServerMessage& event, GWindow& win
 void GEventLoop::handle_mouse_event(const WSAPI_ServerMessage& event, GWindow& window)
 {
 #ifdef GEVENTLOOP_DEBUG
-    dbgprintf("WID=%x MouseEvent %d,%d\n", event.window_id, event.mouse.position.x, event.mouse.position.y);
+    dbgprintf("WID=%x MouseEvent %d,%d,%d\n", event.window_id, event.mouse.position.x, event.mouse.position.y, event.mouse.wheel_delta);
 #endif
     GMouseEvent::Type type;
     switch (event.type) {
     case WSAPI_ServerMessage::Type::MouseMove: type = GEvent::MouseMove; break;
     case WSAPI_ServerMessage::Type::MouseUp: type = GEvent::MouseUp; break;
     case WSAPI_ServerMessage::Type::MouseDown: type = GEvent::MouseDown; break;
+    case WSAPI_ServerMessage::Type::MouseDoubleClick: type = GEvent::MouseDoubleClick; break;
+    case WSAPI_ServerMessage::Type::MouseWheel: type = GEvent::MouseWheel; break;
     default: ASSERT_NOT_REACHED(); break;
     }
     GMouseButton button { GMouseButton::None };
@@ -247,7 +171,7 @@ void GEventLoop::handle_mouse_event(const WSAPI_ServerMessage& event, GWindow& w
     case WSAPI_MouseButton::Middle: button = GMouseButton::Middle; break;
     default: ASSERT_NOT_REACHED(); break;
     }
-    post_event(window, make<GMouseEvent>(type, event.mouse.position, event.mouse.buttons, button, event.mouse.modifiers));
+    post_event(window, make<GMouseEvent>(type, event.mouse.position, event.mouse.buttons, button, event.mouse.modifiers, event.mouse.wheel_delta));
 }
 
 void GEventLoop::handle_menu_event(const WSAPI_ServerMessage& event)
@@ -265,79 +189,61 @@ void GEventLoop::handle_menu_event(const WSAPI_ServerMessage& event)
     ASSERT_NOT_REACHED();
 }
 
-void GEventLoop::wait_for_event()
+void GEventLoop::handle_wm_event(const WSAPI_ServerMessage& event, GWindow& window)
 {
-    fd_set rfds;
-    fd_set wfds;
-    FD_ZERO(&rfds);
-    FD_ZERO(&wfds);
-
-    int max_fd = 0;
-    auto add_fd_to_set = [&max_fd] (int fd, fd_set& set){
-        FD_SET(fd, &set);
-        if (fd > max_fd)
-            max_fd = fd;
-    };
-
-    add_fd_to_set(s_event_fd, rfds);
-    for (auto& notifier : *s_notifiers) {
-        if (notifier->event_mask() & GNotifier::Read)
-            add_fd_to_set(notifier->fd(), rfds);
-        if (notifier->event_mask() & GNotifier::Write)
-            add_fd_to_set(notifier->fd(), wfds);
-        if (notifier->event_mask() & GNotifier::Exceptional)
-            ASSERT_NOT_REACHED();
-    }
-
-    struct timeval timeout = { 0, 0 };
-    if (!s_timers->is_empty() && m_queued_events.is_empty())
-        get_next_timer_expiration(timeout);
-    ASSERT(m_unprocessed_messages.is_empty());
-    int rc = select(max_fd + 1, &rfds, &wfds, nullptr, (m_queued_events.is_empty() && s_timers->is_empty()) ? nullptr : &timeout);
-    if (rc < 0) {
-        ASSERT_NOT_REACHED();
-    }
-
-    for (auto& it : *s_timers) {
-        auto& timer = *it.value;
-        if (!timer.has_expired())
-            continue;
 #ifdef GEVENTLOOP_DEBUG
-        dbgprintf("GEventLoop: Timer %d has expired, sending GTimerEvent to %p\n", timer.timer_id, timer.owner);
+    dbgprintf("GEventLoop: handle_wm_event: %d\n", (int)event.type);
 #endif
-        post_event(*timer.owner, make<GTimerEvent>(timer.timer_id));
-        if (timer.should_reload) {
-            timer.reload();
-        } else {
-            // FIXME: Support removing expired timers that don't want to reload.
-            ASSERT_NOT_REACHED();
-        }
-    }
-
-    for (auto& notifier : *s_notifiers) {
-        if (FD_ISSET(notifier->fd(), &rfds)) {
-            if (notifier->on_ready_to_read)
-                notifier->on_ready_to_read(*notifier);
-        }
-        if (FD_ISSET(notifier->fd(), &wfds)) {
-            if (notifier->on_ready_to_write)
-                notifier->on_ready_to_write(*notifier);
-        }
-    }
-
-    if (!FD_ISSET(s_event_fd, &rfds))
-        return;
-
-    bool success = drain_messages_from_server();
-    ASSERT(success);
+    if (event.type == WSAPI_ServerMessage::WM_WindowStateChanged)
+        return post_event(window, make<GWMWindowStateChangedEvent>(event.wm.client_id, event.wm.window_id, String(event.text, event.text_length), event.wm.rect, event.wm.is_active, (GWindowType)event.wm.window_type, event.wm.is_minimized));
+    if (event.type == WSAPI_ServerMessage::WM_WindowRectChanged)
+        return post_event(window, make<GWMWindowRectChangedEvent>(event.wm.client_id, event.wm.window_id, event.wm.rect));
+    if (event.type == WSAPI_ServerMessage::WM_WindowIconChanged)
+        return post_event(window, make<GWMWindowIconChangedEvent>(event.wm.client_id, event.wm.window_id, String(event.text, event.text_length)));
+    if (event.type == WSAPI_ServerMessage::WM_WindowRemoved)
+        return post_event(window, make<GWMWindowRemovedEvent>(event.wm.client_id, event.wm.window_id));
+    ASSERT_NOT_REACHED();
 }
 
-void GEventLoop::process_unprocessed_messages()
+void GEventLoop::process_unprocessed_bundles()
 {
-    auto unprocessed_events = move(m_unprocessed_messages);
-    for (auto& event : unprocessed_events) {
+    int coalesced_paints = 0;
+    int coalesced_resizes = 0;
+    auto unprocessed_bundles = move(m_unprocessed_bundles);
+
+    HashMap<int, Size> latest_size_for_window_id;
+    for (auto& bundle : unprocessed_bundles) {
+        auto& event = bundle.message;
+        if (event.type == WSAPI_ServerMessage::Type::WindowResized) {
+            latest_size_for_window_id.set(event.window_id, event.window.rect.size);
+        }
+    }
+
+    int paint_count = 0;
+    HashMap<int, Size> latest_paint_size_for_window_id;
+    for (auto& bundle : unprocessed_bundles) {
+        auto& event = bundle.message;
+        if (event.type == WSAPI_ServerMessage::Type::Paint) {
+            ++paint_count;
+#ifdef COALESCING_DEBUG
+            dbgprintf("    %s (window: %s)\n", Rect(event.paint.rect).to_string().characters(), Size(event.paint.window_size).to_string().characters());
+#endif
+            latest_paint_size_for_window_id.set(event.window_id, event.paint.window_size);
+        }
+    }
+#ifdef COALESCING_DEBUG
+    dbgprintf("paint_count: %d\n", paint_count);
+#endif
+
+    for (auto& bundle : unprocessed_bundles) {
+        auto& event = bundle.message;
         if (event.type == WSAPI_ServerMessage::Type::Greeting) {
-            s_server_pid = event.greeting.server_pid;
+            handle_greeting(event);
+            continue;
+        }
+
+        if (event.type == WSAPI_ServerMessage::Type::ScreenRectChanged) {
+            GDesktop::the().did_receive_screen_rect(Badge<GEventLoop>(), event.screen.rect);
             continue;
         }
 
@@ -363,11 +269,17 @@ void GEventLoop::process_unprocessed_messages()
         }
         switch (event.type) {
         case WSAPI_ServerMessage::Type::Paint:
-            handle_paint_event(event, *window);
+            if (Size(event.paint.window_size) != latest_paint_size_for_window_id.get(event.window_id)) {
+                ++coalesced_paints;
+                break;
+            }
+            handle_paint_event(event, *window, bundle.extra_data);
             break;
         case WSAPI_ServerMessage::Type::MouseDown:
+        case WSAPI_ServerMessage::Type::MouseDoubleClick:
         case WSAPI_ServerMessage::Type::MouseUp:
         case WSAPI_ServerMessage::Type::MouseMove:
+        case WSAPI_ServerMessage::Type::MouseWheel:
             handle_mouse_event(event, *window);
             break;
         case WSAPI_ServerMessage::Type::WindowActivated:
@@ -386,125 +298,101 @@ void GEventLoop::process_unprocessed_messages()
             handle_window_entered_or_left_event(event, *window);
             break;
         case WSAPI_ServerMessage::Type::WindowResized:
+            if (Size(event.window.rect.size) != latest_size_for_window_id.get(event.window_id)) {
+                ++coalesced_resizes;
+                break;
+            }
             handle_resize_event(event, *window);
+            break;
+        case WSAPI_ServerMessage::Type::WM_WindowRemoved:
+        case WSAPI_ServerMessage::Type::WM_WindowStateChanged:
+        case WSAPI_ServerMessage::Type::WM_WindowIconChanged:
+            handle_wm_event(event, *window);
             break;
         default:
             break;
         }
     }
 
-    if (!m_unprocessed_messages.is_empty())
-        process_unprocessed_messages();
+#ifdef COALESCING_DEBUG
+    if (coalesced_paints)
+        dbgprintf("Coalesced %d paints\n", coalesced_paints);
+    if (coalesced_resizes)
+        dbgprintf("Coalesced %d resizes\n", coalesced_resizes);
+#endif
 }
 
 bool GEventLoop::drain_messages_from_server()
 {
-    bool is_first_pass = true;
     for (;;) {
         WSAPI_ServerMessage message;
-        ssize_t nread = read(s_event_fd, &message, sizeof(WSAPI_ServerMessage));
+        ssize_t nread = recv(s_windowserver_fd, &message, sizeof(WSAPI_ServerMessage), MSG_DONTWAIT);
         if (nread < 0) {
+            if (errno == EAGAIN) {
+                return true;
+            }
             perror("read");
             quit(1);
             return false;
         }
         if (nread == 0) {
-            if (is_first_pass) {
-                fprintf(stderr, "EOF on WindowServer fd\n");
-                quit(1);
-                return false;
-            }
-            return true;
+            fprintf(stderr, "EOF on WindowServer fd\n");
+            quit(1);
+            exit(-1);
+            return false;
         }
-        assert(nread == sizeof(message));
-        m_unprocessed_messages.append(move(message));
-        is_first_pass = false;
+        ASSERT(nread == sizeof(message));
+        ByteBuffer extra_data;
+        if (message.extra_size) {
+            extra_data = ByteBuffer::create_uninitialized(message.extra_size);
+            int extra_nread = read(s_windowserver_fd, extra_data.data(), extra_data.size());
+            ASSERT(extra_nread == message.extra_size);
+        }
+        m_unprocessed_bundles.append({ move(message), move(extra_data) });
     }
 }
 
-bool GEventLoop::EventLoopTimer::has_expired() const
+bool GEventLoop::post_message_to_server(const WSAPI_ClientMessage& message, const ByteBuffer& extra_data)
 {
-    timeval now;
-    gettimeofday(&now, nullptr);
-    return now.tv_sec > fire_time.tv_sec || (now.tv_sec == fire_time.tv_sec && now.tv_usec >= fire_time.tv_usec);
-}
+    if (!extra_data.is_empty())
+        const_cast<WSAPI_ClientMessage&>(message).extra_size = extra_data.size();
 
-void GEventLoop::EventLoopTimer::reload()
-{
-    gettimeofday(&fire_time, nullptr);
-    fire_time.tv_sec += interval / 1000;
-    fire_time.tv_usec += (interval % 1000) * 1000;
-}
+    struct iovec iov[2];
+    int iov_count = 1;
+    iov[0].iov_base = (void*)&message;
+    iov[0].iov_len = sizeof(message);
 
-void GEventLoop::get_next_timer_expiration(timeval& soonest)
-{
-    ASSERT(!s_timers->is_empty());
-    bool has_checked_any = false;
-    for (auto& it : *s_timers) {
-        auto& fire_time = it.value->fire_time;
-        if (!has_checked_any || fire_time.tv_sec < soonest.tv_sec || (fire_time.tv_sec == soonest.tv_sec && fire_time.tv_usec < soonest.tv_usec))
-            soonest = fire_time;
-        has_checked_any = true;
+    if (!extra_data.is_empty()) {
+        iov[1].iov_base = (void*)extra_data.data();
+        iov[1].iov_len = extra_data.size();
+        ++iov_count;
     }
-}
 
-int GEventLoop::register_timer(GObject& object, int milliseconds, bool should_reload)
-{
-    ASSERT(milliseconds >= 0);
-    auto timer = make<EventLoopTimer>();
-    timer->owner = object.make_weak_ptr();
-    timer->interval = milliseconds;
-    timer->reload();
-    timer->should_reload = should_reload;
-    int timer_id = ++s_next_timer_id;  // FIXME: This will eventually wrap around.
-    ASSERT(timer_id); // FIXME: Aforementioned wraparound.
-    timer->timer_id = timer_id;
-    s_timers->set(timer->timer_id, move(timer));
-    return timer_id;
-}
+    int nwritten = writev(s_windowserver_fd, iov, iov_count);
+    ASSERT(nwritten == sizeof(message) + extra_data.size());
 
-bool GEventLoop::unregister_timer(int timer_id)
-{
-    auto it = s_timers->find(timer_id);
-    if (it == s_timers->end())
-        return false;
-    s_timers->remove(it);
     return true;
-}
-
-void GEventLoop::register_notifier(Badge<GNotifier>, GNotifier& notifier)
-{
-    s_notifiers->set(&notifier);
-}
-
-void GEventLoop::unregister_notifier(Badge<GNotifier>, GNotifier& notifier)
-{
-    s_notifiers->remove(&notifier);
-}
-
-bool GEventLoop::post_message_to_server(const WSAPI_ClientMessage& message)
-{
-    int nwritten = write(s_event_fd, &message, sizeof(WSAPI_ClientMessage));
-    return nwritten == sizeof(WSAPI_ClientMessage);
 }
 
 bool GEventLoop::wait_for_specific_event(WSAPI_ServerMessage::Type type, WSAPI_ServerMessage& event)
 {
-
     for (;;) {
         fd_set rfds;
         FD_ZERO(&rfds);
-        FD_SET(s_event_fd, &rfds);
-        int rc = select(s_event_fd + 1, &rfds, nullptr, nullptr, nullptr);
+        FD_SET(s_windowserver_fd, &rfds);
+        int rc = select(s_windowserver_fd + 1, &rfds, nullptr, nullptr, nullptr);
+        if (rc < 0) {
+            perror("select");
+        }
         ASSERT(rc > 0);
-        ASSERT(FD_ISSET(s_event_fd, &rfds));
+        ASSERT(FD_ISSET(s_windowserver_fd, &rfds));
         bool success = drain_messages_from_server();
         if (!success)
             return false;
-        for (ssize_t i = 0; i < m_unprocessed_messages.size(); ++i) {
-            if (m_unprocessed_messages[i].type == type) {
-                event = move(m_unprocessed_messages[i]);
-                m_unprocessed_messages.remove(i);
+        for (ssize_t i = 0; i < m_unprocessed_bundles.size(); ++i) {
+            if (m_unprocessed_bundles[i].message.type == type) {
+                event = move(m_unprocessed_bundles[i].message);
+                m_unprocessed_bundles.remove(i);
                 return true;
             }
         }
@@ -520,4 +408,11 @@ WSAPI_ServerMessage GEventLoop::sync_request(const WSAPI_ClientMessage& request,
     success = wait_for_specific_event(response_type, response);
     ASSERT(success);
     return response;
+}
+
+void GEventLoop::handle_greeting(WSAPI_ServerMessage& message)
+{
+    s_server_pid = message.greeting.server_pid;
+    s_my_client_id = message.greeting.your_client_id;
+    GDesktop::the().did_receive_screen_rect(Badge<GEventLoop>(), message.greeting.screen_rect);
 }

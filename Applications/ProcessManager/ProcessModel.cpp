@@ -1,11 +1,19 @@
 #include "ProcessModel.h"
-#include <LibGUI/GFile.h>
+#include "GraphWidget.h"
+#include <LibCore/CFile.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <pwd.h>
 
-ProcessModel::ProcessModel()
+ProcessModel::ProcessModel(GraphWidget& graph)
+    : m_graph(graph)
+    , m_proc_all("/proc/all")
 {
+    if (!m_proc_all.open(CIODevice::ReadOnly)) {
+        fprintf(stderr, "ProcessManager: Failed to open /proc/all: %s\n", m_proc_all.error_string());
+        exit(1);
+    }
+
     setpwent();
     while (auto* passwd = getpwent())
         m_usernames.set(passwd->pw_uid, passwd->pw_name);
@@ -21,12 +29,12 @@ ProcessModel::~ProcessModel()
 {
 }
 
-int ProcessModel::row_count() const
+int ProcessModel::row_count(const GModelIndex&) const
 {
-    return m_processes.size();
+    return m_pids.size();
 }
 
-int ProcessModel::column_count() const
+int ProcessModel::column_count(const GModelIndex&) const
 {
     return Column::__Count;
 }
@@ -43,6 +51,7 @@ String ProcessModel::column_name(int column) const
     case Column::Physical: return "Physical";
     case Column::CPU: return "CPU";
     case Column::Name: return "Name";
+    case Column::Syscalls: return "Syscalls";
     default: ASSERT_NOT_REACHED();
     }
 }
@@ -51,14 +60,15 @@ GModel::ColumnMetadata ProcessModel::column_metadata(int column) const
 {
     switch (column) {
     case Column::Icon: return { 16, TextAlignment::CenterLeft };
-    case Column::PID: return { 25, TextAlignment::CenterRight };
+    case Column::PID: return { 32, TextAlignment::CenterRight };
     case Column::State: return { 75, TextAlignment::CenterLeft };
     case Column::Priority: return { 16, TextAlignment::CenterLeft };
     case Column::User: return { 50, TextAlignment::CenterLeft };
     case Column::Linear: return { 65, TextAlignment::CenterRight };
     case Column::Physical: return { 65, TextAlignment::CenterRight };
-    case Column::CPU: return { 25, TextAlignment::CenterRight };
+    case Column::CPU: return { 32, TextAlignment::CenterRight };
     case Column::Name: return { 140, TextAlignment::CenterLeft };
+    case Column::Syscalls: return { 60, TextAlignment::CenterRight };
     default: ASSERT_NOT_REACHED();
     }
 }
@@ -82,18 +92,22 @@ GVariant ProcessModel::data(const GModelIndex& index, Role role) const
         case Column::State: return process.current_state.state;
         case Column::User: return process.current_state.user;
         case Column::Priority:
-            if (process.current_state.priority == "Low")
+            if (process.current_state.priority == "Idle")
                 return 0;
-            if (process.current_state.priority == "Normal")
+            if (process.current_state.priority == "Low")
                 return 1;
-            if (process.current_state.priority == "High")
+            if (process.current_state.priority == "Normal")
                 return 2;
+            if (process.current_state.priority == "High")
+                return 3;
             ASSERT_NOT_REACHED();
             return 3;
         case Column::Linear: return (int)process.current_state.linear;
         case Column::Physical: return (int)process.current_state.physical;
         case Column::CPU: return process.current_state.cpu_percent;
         case Column::Name: return process.current_state.name;
+        // FIXME: GVariant with unsigned?
+        case Column::Syscalls: return (int)process.current_state.syscalls;
         }
         ASSERT_NOT_REACHED();
         return { };
@@ -106,6 +120,8 @@ GVariant ProcessModel::data(const GModelIndex& index, Role role) const
         case Column::State: return process.current_state.state;
         case Column::User: return process.current_state.user;
         case Column::Priority:
+            if (process.current_state.priority == "Idle")
+                return String::empty();
             if (process.current_state.priority == "High")
                 return *m_high_priority_icon;
             if (process.current_state.priority == "Low")
@@ -117,6 +133,8 @@ GVariant ProcessModel::data(const GModelIndex& index, Role role) const
         case Column::Physical: return pretty_byte_size(process.current_state.physical);
         case Column::CPU: return process.current_state.cpu_percent;
         case Column::Name: return process.current_state.name;
+        // FIXME: It's weird that GVariant doesn't support unsigned ints. Should it?
+        case Column::Syscalls: return (int)process.current_state.syscalls;
         }
     }
 
@@ -125,12 +143,7 @@ GVariant ProcessModel::data(const GModelIndex& index, Role role) const
 
 void ProcessModel::update()
 {
-    GFile file("/proc/all");
-    if (!file.open(GIODevice::ReadOnly)) {
-        fprintf(stderr, "ProcessManager: Failed to open /proc/all: %s\n", file.error_string());
-        exit(1);
-        return;
-    }
+    m_proc_all.seek(0);
 
     unsigned last_sum_nsched = 0;
     for (auto& it : m_processes)
@@ -139,11 +152,12 @@ void ProcessModel::update()
     HashTable<pid_t> live_pids;
     unsigned sum_nsched = 0;
     for (;;) {
-        auto line = file.read_line(1024);
+        auto line = m_proc_all.read_line(1024);
         if (line.is_empty())
             break;
-        auto parts = String((const char*)line.pointer(), line.size() - 1, Chomp).split(',');
-        if (parts.size() < 17)
+        auto chomped = String((const char*)line.pointer(), line.size() - 1, Chomp);
+        auto parts = chomped.split_view(',');
+        if (parts.size() < 18)
             break;
         bool ok;
         pid_t pid = parts[0].to_uint(ok);
@@ -163,6 +177,8 @@ void ProcessModel::update()
                 state.user = String::format("%u", uid);
         }
         state.priority = parts[16];
+        state.syscalls = parts[17].to_uint(ok);
+        ASSERT(ok);
         state.state = parts[7];
         state.name = parts[11];
         state.linear = parts[12].to_uint(ok);
@@ -184,20 +200,25 @@ void ProcessModel::update()
     }
 
     m_pids.clear();
-    Vector<pid_t> pids_to_remove;
+    float total_cpu_percent = 0;
+    Vector<pid_t, 16> pids_to_remove;
     for (auto& it : m_processes) {
         if (!live_pids.contains(it.key)) {
             pids_to_remove.append(it.key);
             continue;
         }
-
         auto& process = *it.value;
         dword nsched_diff = process.current_state.nsched - process.previous_state.nsched;
         process.current_state.cpu_percent = ((float)nsched_diff * 100) / (float)(sum_nsched - last_sum_nsched);
-        m_pids.append(it.key);
+        if (it.key != 0) {
+            total_cpu_percent += process.current_state.cpu_percent;
+            m_pids.append(it.key);
+        }
     }
     for (auto pid : pids_to_remove)
         m_processes.remove(pid);
+
+    m_graph.add_value(total_cpu_percent);
 
     did_update();
 }

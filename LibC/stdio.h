@@ -7,6 +7,8 @@
 #include <stdarg.h>
 #include <limits.h>
 
+#define BUFSIZ 1024
+
 __BEGIN_DECLS
  #ifndef EOF
 #define EOF (-1)
@@ -28,6 +30,8 @@ struct __STDIO_FILE {
     char* buffer;
     size_t buffer_size;
     size_t buffer_index;
+    int have_ungotten;
+    char ungotten;
     char default_buffer[BUFSIZ];
 };
 
@@ -36,6 +40,7 @@ typedef struct __STDIO_FILE FILE;
 extern FILE* stdin;
 extern FILE* stdout;
 extern FILE* stderr;
+extern FILE* stddbg;
 
 typedef size_t fpos_t;
 

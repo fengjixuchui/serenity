@@ -28,6 +28,13 @@ public:
         move_by(delta.x(), delta.y());
     }
 
+    Point translated(const Point& delta) const
+    {
+        Point point = *this;
+        point.move_by(delta);
+        return point;
+    }
+
     Point translated(int dx, int dy) const
     {
         Point point = *this;
@@ -49,9 +56,12 @@ public:
     }
 
     Point operator-() const { return { -m_x, -m_y }; }
+    Point operator-(const Point& other) const { return { m_x - other.m_x, m_y - other.m_y }; }
 
     operator WSAPI_Point() const;
     String to_string() const { return String::format("[%d,%d]", x(), y()); }
+
+    bool is_null() const { return !m_x && !m_y; }
 
 private:
     int m_x { 0 };

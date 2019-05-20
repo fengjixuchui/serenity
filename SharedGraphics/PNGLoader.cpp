@@ -1,5 +1,7 @@
 #include <SharedGraphics/PNGLoader.h>
-#include <Kernel/NetworkOrdered.h>
+#include <AK/NetworkOrdered.h>
+#include <AK/MappedFile.h>
+#include <AK/FileSystemPath.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -81,7 +83,7 @@ public:
     {
         if (m_size_remaining < count)
             return false;
-        buffer = ByteBuffer::wrap((void*)m_data_ptr, count);
+        buffer = ByteBuffer::wrap(m_data_ptr, count);
         m_data_ptr += count;
         m_size_remaining -= count;
         return true;
@@ -101,41 +103,12 @@ static bool process_chunk(Streamer&, PNGLoadingContext& context);
 
 RetainPtr<GraphicsBitmap> load_png(const String& path)
 {
-    int fd = open(path.characters(), O_RDONLY);
-    if (fd < 0) {
-        perror("open");
+    MappedFile mapped_file(path);
+    if (!mapped_file.is_valid())
         return nullptr;
-    }
-
-    struct stat st;
-    if (fstat(fd, &st) < 0) {
-        perror("fstat");
-        if (close(fd) < 0)
-            perror("close");
-        return nullptr;
-    }
-
-    if (st.st_size < 8) {
-        if (close(fd) < 0)
-            perror("close");
-        return nullptr;
-    }
-
-    auto* mapped_file = (byte*)mmap(nullptr, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-    if (mapped_file == MAP_FAILED) {
-        if (close(fd) < 0)
-            perror("close");
-        return nullptr;
-    }
-
-    auto bitmap = load_png_impl(mapped_file, st.st_size);
-
-    if (munmap(mapped_file, st.st_size) < 0)
-        perror("munmap");
-
-    if (close(fd) < 0)
-        perror("close");
-
+    auto bitmap = load_png_impl((const byte*)mapped_file.pointer(), mapped_file.size());
+    if (bitmap)
+        bitmap->set_mmap_name(String::format("GraphicsBitmap [%dx%d] - Decoded PNG: %s", bitmap->width(), bitmap->height(), FileSystemPath(path).string().characters()));
     return bitmap;
 }
 
@@ -425,9 +398,11 @@ static bool process_IHDR(const ByteBuffer& data, PNGLoadingContext& context)
         ASSERT_NOT_REACHED();
     }
 
+#ifdef PNG_DEBUG
     printf("PNG: %dx%d (%d bpp)\n", context.width, context.height, context.bit_depth);
     printf("     Color type: %b\n", context.color_type);
     printf(" Interlace type: %b\n", context.interlace_method);
+#endif
 
     context.decompression_buffer_size = (context.width * context.height * context.bytes_per_pixel + context.height);
     context.decompression_buffer = (byte*)mmap(nullptr, context.decompression_buffer_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
@@ -463,7 +438,9 @@ static bool process_chunk(Streamer& streamer, PNGLoadingContext& context)
         printf("Bail at chunk_crc\n");
         return false;
     }
+#ifdef PNG_DEBUG
     printf("Chunk type: '%s', size: %u, crc: %x\n", chunk_type, chunk_size, chunk_crc);
+#endif
 
     if (!strcmp((const char*)chunk_type, "IHDR"))
         return process_IHDR(chunk_data, context);

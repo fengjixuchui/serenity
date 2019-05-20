@@ -14,6 +14,7 @@ public:
     static Retained<ByteBufferImpl> create_zeroed(int);
     static Retained<ByteBufferImpl> copy(const void*, int);
     static Retained<ByteBufferImpl> wrap(void*, int);
+    static Retained<ByteBufferImpl> wrap(const void*, int);
     static Retained<ByteBufferImpl> adopt(void*, int);
 
     ~ByteBufferImpl() { clear(); }
@@ -89,6 +90,7 @@ public:
     static ByteBuffer create_uninitialized(ssize_t size) { return ByteBuffer(ByteBufferImpl::create_uninitialized(size)); }
     static ByteBuffer create_zeroed(ssize_t size) { return ByteBuffer(ByteBufferImpl::create_zeroed(size)); }
     static ByteBuffer copy(const void* data, ssize_t size) { return ByteBuffer(ByteBufferImpl::copy(data, size)); }
+    static ByteBuffer wrap(const void* data, ssize_t size) { return ByteBuffer(ByteBufferImpl::wrap(data, size)); }
     static ByteBuffer wrap(void* data, ssize_t size) { return ByteBuffer(ByteBufferImpl::wrap(data, size)); }
     static ByteBuffer adopt(void* data, ssize_t size) { return ByteBuffer(ByteBufferImpl::adopt(data, size)); }
 
@@ -104,6 +106,9 @@ public:
     bool is_empty() const { return !m_impl || m_impl->is_empty(); }
     ssize_t size() const { return m_impl ? m_impl->size() : 0; }
 
+    byte* data() { return pointer(); }
+    const byte* data() const { return pointer(); }
+
     byte* pointer() { return m_impl ? m_impl->pointer() : nullptr; }
     const byte* pointer() const { return m_impl ? m_impl->pointer() : nullptr; }
 
@@ -112,6 +117,13 @@ public:
 
     void* end_pointer() { return m_impl ? m_impl->end_pointer() : nullptr; }
     const void* end_pointer() const { return m_impl ? m_impl->end_pointer() : nullptr; }
+
+    ByteBuffer isolated_copy() const
+    {
+        if (!m_impl)
+            return { };
+        return copy(m_impl->pointer(), m_impl->size());
+    }
 
     // NOTE: trim() does not reallocate.
     void trim(ssize_t size)
@@ -214,6 +226,11 @@ inline Retained<ByteBufferImpl> ByteBufferImpl::copy(const void* data, int size)
 inline Retained<ByteBufferImpl> ByteBufferImpl::wrap(void* data, int size)
 {
     return ::adopt(*new ByteBufferImpl(data, size, Wrap));
+}
+
+inline Retained<ByteBufferImpl> ByteBufferImpl::wrap(const void* data, int size)
+{
+    return ::adopt(*new ByteBufferImpl(const_cast<void*>(data), size, Wrap));
 }
 
 inline Retained<ByteBufferImpl> ByteBufferImpl::adopt(void* data, int size)

@@ -2,16 +2,16 @@
 #include <LibGUI/GBoxLayout.h>
 #include <LibGUI/GButton.h>
 #include <LibGUI/GAction.h>
-#include <SharedGraphics/Painter.h>
+#include <LibGUI/GPainter.h>
 
 GToolBar::GToolBar(GWidget* parent)
     : GWidget(parent)
 {
     set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    set_preferred_size({ 0, 30 });
+    set_preferred_size({ 0, 28 });
     set_layout(make<GBoxLayout>(Orientation::Horizontal));
     layout()->set_spacing(0);
-    layout()->set_margins({ 3, 3, 3, 3 });
+    layout()->set_margins({ 2, 2, 2, 2 });
 }
 
 GToolBar::~GToolBar()
@@ -26,6 +26,8 @@ void GToolBar::add_action(Retained<GAction>&& action)
     item->action = move(action);
 
     auto* button = new GButton(this);
+    button->set_action(*item->action);
+    button->set_tooltip(item->action->text());
     if (item->action->icon())
         button->set_icon(item->action->icon());
     else
@@ -34,7 +36,7 @@ void GToolBar::add_action(Retained<GAction>&& action)
         raw_action_ptr->activate();
     };
 
-    button->set_button_style(GButtonStyle::CoolBar);
+    button->set_button_style(ButtonStyle::CoolBar);
     button->set_size_policy(SizePolicy::Fixed, SizePolicy::Fixed);
     ASSERT(button->size_policy(Orientation::Horizontal) == SizePolicy::Fixed);
     ASSERT(button->size_policy(Orientation::Vertical) == SizePolicy::Fixed);
@@ -50,16 +52,16 @@ public:
     {
         set_size_policy(SizePolicy::Fixed, SizePolicy::Fixed);
         set_background_color(Color::White);
-        set_preferred_size({ 8, 20 });
+        set_preferred_size({ 8, 22 });
     }
     virtual ~SeparatorWidget() override { }
 
     virtual void paint_event(GPaintEvent& event) override
     {
-        Painter painter(*this);
-        painter.set_clip_rect(event.rect());
+        GPainter painter(*this);
+        painter.add_clip_rect(event.rect());
         painter.translate(rect().center().x() - 1, 0);
-        painter.draw_line({ 0, 0 }, { 0, rect().bottom() }, Color::DarkGray);
+        painter.draw_line({ 0, 0 }, { 0, rect().bottom() }, Color::MidGray);
         painter.draw_line({ 1, 0 }, { 1, rect().bottom() }, Color::White);
     }
 
@@ -77,7 +79,11 @@ void GToolBar::add_separator()
 
 void GToolBar::paint_event(GPaintEvent& event)
 {
-    Painter painter(*this);
-    painter.set_clip_rect(event.rect());
-    GStyle::the().paint_surface(painter, rect());
+    GPainter painter(*this);
+    painter.add_clip_rect(event.rect());
+
+    if (m_has_frame)
+        StylePainter::paint_surface(painter, rect(), x() != 0, y() != 0);
+    else
+        painter.fill_rect(event.rect(), Color::LightGray);
 }

@@ -3,6 +3,7 @@
 #include <LibGUI/GWidget.h>
 
 class GLabel;
+class GResizeCorner;
 
 class GStatusBar : public GWidget {
 public:
@@ -10,7 +11,7 @@ public:
     virtual ~GStatusBar() override;
 
     String text() const;
-    void set_text(String&&);
+    void set_text(const String&);
 
     virtual const char* class_name() const override { return "GStatusBar"; }
 
@@ -18,4 +19,5 @@ private:
     virtual void paint_event(GPaintEvent&) override;
 
     GLabel* m_label { nullptr };
+    GResizeCorner* m_corner { nullptr };
 };

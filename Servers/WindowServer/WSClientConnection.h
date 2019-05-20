@@ -5,15 +5,15 @@
 #include <AK/WeakPtr.h>
 #include <AK/Function.h>
 #include <SharedGraphics/GraphicsBitmap.h>
-#include <WindowServer/WSMessageReceiver.h>
-#include <WindowServer/WSMessage.h>
+#include <LibCore/CObject.h>
+#include <WindowServer/WSEvent.h>
 
 class WSWindow;
 class WSMenu;
 class WSMenuBar;
 struct WSAPI_ServerMessage;
 
-class WSClientConnection final : public WSMessageReceiver {
+class WSClientConnection final : public CObject {
 public:
     explicit WSClientConnection(int fd);
     virtual ~WSClientConnection() override;
@@ -21,7 +21,7 @@ public:
     static WSClientConnection* from_client_id(int client_id);
     static void for_each_client(Function<void(WSClientConnection&)>);
 
-    void post_message(const WSAPI_ServerMessage&);
+    void post_message(const WSAPI_ServerMessage&, const ByteBuffer& = { });
 
     int client_id() const { return m_client_id; }
     WSMenuBar* app_menubar() { return m_app_menubar.ptr(); }
@@ -36,34 +36,48 @@ public:
     template<typename Matching, typename Callback> void for_each_window_matching(Matching, Callback);
     template<typename Callback> void for_each_window(Callback);
 
-private:
-    virtual void on_message(WSMessage&) override;
+    void notify_about_new_screen_rect(const Rect&);
+    void post_paint_message(WSWindow&);
 
-    void on_request(WSAPIClientRequest&);
-    void handle_request(WSAPICreateMenubarRequest&);
-    void handle_request(WSAPIDestroyMenubarRequest&);
-    void handle_request(WSAPICreateMenuRequest&);
-    void handle_request(WSAPIDestroyMenuRequest&);
-    void handle_request(WSAPISetApplicationMenubarRequest&);
-    void handle_request(WSAPIAddMenuToMenubarRequest&);
-    void handle_request(WSAPIAddMenuItemRequest&);
-    void handle_request(WSAPIAddMenuSeparatorRequest&);
-    void handle_request(WSAPISetWindowTitleRequest&);
-    void handle_request(WSAPIGetWindowTitleRequest&);
-    void handle_request(WSAPISetWindowRectRequest&);
-    void handle_request(WSAPIGetWindowRectRequest&);
-    void handle_request(WSAPISetClipboardContentsRequest&);
-    void handle_request(WSAPIGetClipboardContentsRequest&);
-    void handle_request(WSAPICreateWindowRequest&);
-    void handle_request(WSAPIDestroyWindowRequest&);
-    void handle_request(WSAPIInvalidateRectRequest&);
-    void handle_request(WSAPIDidFinishPaintingNotification&);
-    void handle_request(WSAPIGetWindowBackingStoreRequest&);
-    void handle_request(WSAPISetWindowBackingStoreRequest&);
-    void handle_request(WSAPISetGlobalCursorTrackingRequest&);
-    void handle_request(WSAPISetWindowOpacityRequest&);
-    void handle_request(WSAPISetWallpaperRequest&);
-    void handle_request(WSAPIGetWallpaperRequest&);
+    void did_misbehave();
+
+private:
+    virtual void event(CEvent&) override;
+
+    void on_request(const WSAPIClientRequest&);
+    void handle_request(const WSAPICreateMenubarRequest&);
+    void handle_request(const WSAPIDestroyMenubarRequest&);
+    void handle_request(const WSAPICreateMenuRequest&);
+    void handle_request(const WSAPIDestroyMenuRequest&);
+    void handle_request(const WSAPISetApplicationMenubarRequest&);
+    void handle_request(const WSAPIAddMenuToMenubarRequest&);
+    void handle_request(const WSAPIAddMenuItemRequest&);
+    void handle_request(const WSAPIUpdateMenuItemRequest&);
+    void handle_request(const WSAPIAddMenuSeparatorRequest&);
+    void handle_request(const WSAPISetWindowTitleRequest&);
+    void handle_request(const WSAPIGetWindowTitleRequest&);
+    void handle_request(const WSAPISetWindowRectRequest&);
+    void handle_request(const WSAPIGetWindowRectRequest&);
+    void handle_request(const WSAPISetWindowIconRequest&);
+    void handle_request(const WSAPISetClipboardContentsRequest&);
+    void handle_request(const WSAPIGetClipboardContentsRequest&);
+    void handle_request(const WSAPICreateWindowRequest&);
+    void handle_request(const WSAPIDestroyWindowRequest&);
+    void handle_request(const WSAPIInvalidateRectRequest&);
+    void handle_request(const WSAPIDidFinishPaintingNotification&);
+    void handle_request(const WSAPIGetWindowBackingStoreRequest&);
+    void handle_request(const WSAPISetWindowBackingStoreRequest&);
+    void handle_request(const WSAPISetGlobalCursorTrackingRequest&);
+    void handle_request(const WSAPISetWindowOpacityRequest&);
+    void handle_request(const WSAPISetWallpaperRequest&);
+    void handle_request(const WSAPIGetWallpaperRequest&);
+    void handle_request(const WSAPISetWindowOverrideCursorRequest&);
+    void handle_request(const WSWMAPISetActiveWindowRequest&);
+    void handle_request(const WSWMAPISetWindowMinimizedRequest&);
+    void handle_request(const WSWMAPIStartWindowResizeRequest&);
+    void handle_request(const WSAPIPopupMenuRequest&);
+    void handle_request(const WSAPIDismissMenuRequest&);
+    void handle_request(const WSAPISetWindowHasAlphaChannelRequest&);
 
     void post_error(const String&);
 

@@ -9,6 +9,7 @@ class GAction;
 class GKeyEvent;
 class GEventLoop;
 class GMenuBar;
+class Point;
 
 class GApplication {
 public:
@@ -17,16 +18,21 @@ public:
     ~GApplication();
 
     int exec();
-    void quit(int);
+    void quit(int = 0);
 
     void set_menubar(OwnPtr<GMenuBar>&&);
     GAction* action_for_key_event(const GKeyEvent&);
 
-    void register_shortcut_action(Badge<GAction>, GAction&);
-    void unregister_shortcut_action(Badge<GAction>, GAction&);
+    void register_global_shortcut_action(Badge<GAction>, GAction&);
+    void unregister_global_shortcut_action(Badge<GAction>, GAction&);
+
+    void show_tooltip(const String&, const Point& screen_location);
+    void hide_tooltip();
 
 private:
     OwnPtr<GEventLoop> m_event_loop;
     OwnPtr<GMenuBar> m_menubar;
-    HashMap<GShortcut, GAction*> m_shortcut_actions;
+    HashMap<GShortcut, GAction*> m_global_shortcut_actions;
+    class TooltipWindow;
+    TooltipWindow* m_tooltip_window { nullptr };
 };

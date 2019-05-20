@@ -10,10 +10,11 @@
 #include <LibGUI/GMenu.h>
 #include <LibGUI/GMenuBar.h>
 #include <LibGUI/GInputBox.h>
+#include <LibGUI/GSplitter.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 IRCAppWindow::IRCAppWindow()
-    : m_client("127.0.0.1", 6667)
 {
     update_title();
     set_rect(200, 200, 600, 400);
@@ -51,13 +52,21 @@ void IRCAppWindow::setup_client()
         m_client.join_channel("#test");
     };
 
-    m_client.connect();
+    GInputBox input_box("Enter server:", "Connect to server", this);
+    auto result = input_box.exec();
+    if (result == GInputBox::ExecCancel)
+        ::exit(0);
+
+    m_client.set_server(input_box.text_value(), 6667);
+    update_title();
+    bool success = m_client.connect();
+    ASSERT(success);
 }
 
 void IRCAppWindow::setup_actions()
 {
     m_join_action = GAction::create("Join channel", GraphicsBitmap::load_from_file("/res/icons/16x16/irc-join.png"), [&] (auto&) {
-        GInputBox input_box("Enter nickname:", "Join channel", this);
+        GInputBox input_box("Enter channel name:", "Join channel", this);
         if (input_box.exec() == GInputBox::ExecOK && !input_box.text_value().is_empty())
             m_client.handle_join_action(input_box.text_value());
     });
@@ -124,7 +133,10 @@ void IRCAppWindow::setup_widgets()
 {
     auto* widget = new GWidget(nullptr);
     set_main_widget(widget);
+    widget->set_fill_with_background_color(true);
+    widget->set_background_color(Color::LightGray);
     widget->set_layout(make<GBoxLayout>(Orientation::Vertical));
+    widget->layout()->set_margins({ 4, 4, 4, 4 });
 
     auto* toolbar = new GToolBar(widget);
     toolbar->add_action(*m_change_nick_action);
@@ -136,16 +148,17 @@ void IRCAppWindow::setup_widgets()
     toolbar->add_action(*m_open_query_action);
     toolbar->add_action(*m_close_query_action);
 
-    auto* horizontal_container = new GWidget(widget);
-    horizontal_container->set_layout(make<GBoxLayout>(Orientation::Horizontal));
+    auto* horizontal_container = new GSplitter(Orientation::Horizontal, widget);
 
     m_window_list = new GTableView(horizontal_container);
     m_window_list->set_headers_visible(false);
     m_window_list->set_alternating_row_colors(false);
     m_window_list->set_model(m_client.client_window_list_model());
+    m_window_list->set_activates_on_selection(true);
     m_window_list->set_size_policy(SizePolicy::Fixed, SizePolicy::Fill);
     m_window_list->set_preferred_size({ 100, 0 });
-    m_client.client_window_list_model()->on_activation = [this] (IRCWindow& window) {
+    m_window_list->on_activation = [this] (auto& index) {
+        auto& window = m_client.window_at(index.row());
         m_container->set_active_widget(&window);
         window.clear_unread_count();
     };

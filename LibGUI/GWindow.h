@@ -1,16 +1,28 @@
 #pragma once
 
-#include "GObject.h"
+#include <LibCore/CObject.h>
+#include <LibGUI/GWindowType.h>
 #include <SharedGraphics/Rect.h>
 #include <SharedGraphics/GraphicsBitmap.h>
 #include <AK/AKString.h>
 #include <AK/WeakPtr.h>
 
 class GWidget;
+class GWMEvent;
 
-class GWindow : public GObject {
+enum class GStandardCursor {
+    None = 0,
+    Arrow,
+    IBeam,
+    ResizeHorizontal,
+    ResizeVertical,
+    ResizeDiagonalTLBR,
+    ResizeDiagonalBLTR,
+};
+
+class GWindow : public CObject {
 public:
-    GWindow(GObject* parent = nullptr);
+    GWindow(CObject* parent = nullptr);
     virtual ~GWindow() override;
 
     static GWindow* from_window_id(int);
@@ -18,14 +30,24 @@ public:
     bool is_modal() const { return m_modal; }
     void set_modal(bool);
 
+    bool is_fullscreen() const { return m_fullscreen; }
+    void set_fullscreen(bool fullscreen) { m_fullscreen = fullscreen; }
+
+    bool is_resizable() const { return m_resizable; }
+    void set_resizable(bool resizable) { m_resizable = resizable; }
+
     void set_double_buffering_enabled(bool);
     void set_has_alpha_channel(bool);
     void set_opacity(float);
+    void set_window_type(GWindowType);
 
     int window_id() const { return m_window_id; }
 
     String title() const;
     void set_title(const String&);
+
+    Color background_color() const { return m_background_color; }
+    void set_background_color(Color color) { m_background_color = color; }
 
     int x() const { return rect().x(); }
     int y() const { return rect().y(); }
@@ -42,7 +64,10 @@ public:
     void move_to(int x, int y) { move_to({ x, y }); }
     void move_to(const Point& point) { set_rect({ point, size() }); }
 
-    virtual void event(GEvent&) override;
+    void resize(int width, int height) { resize({ width, height }); }
+    void resize(const Size& size) { set_rect({ position(), size }); }
+
+    virtual void event(CEvent&) override;
 
     bool is_visible() const;
     bool is_active() const { return m_is_active; }
@@ -50,6 +75,8 @@ public:
     void show();
     void hide();
     void close();
+
+    void start_wm_resize();
 
     GWidget* main_widget() { return m_main_widget; }
     const GWidget* main_widget() const { return m_main_widget; }
@@ -84,7 +111,17 @@ public:
     Size base_size() const { return m_base_size; }
     void set_base_size(const Size& size) { m_base_size = size; }
 
+    void set_override_cursor(GStandardCursor);
+
+    String icon_path() const { return m_icon_path; }
+    void set_icon_path(const String&);
+
+    Vector<GWidget*> focusable_widgets() const;
+
     virtual const char* class_name() const override { return "GWindow"; }
+
+protected:
+    virtual void wm_event(GWMEvent&);
 
 private:
     virtual bool is_window() const override final { return true; }
@@ -98,20 +135,23 @@ private:
     int m_window_id { 0 };
     float m_opacity_when_windowless { 1.0f };
     GWidget* m_main_widget { nullptr };
-    GWidget* m_focused_widget { nullptr };
+    WeakPtr<GWidget> m_focused_widget;
     WeakPtr<GWidget> m_global_cursor_tracking_widget;
     WeakPtr<GWidget> m_automatic_cursor_tracking_widget;
     WeakPtr<GWidget> m_hovered_widget;
     Rect m_rect_when_windowless;
     String m_title_when_windowless;
-    Vector<Rect> m_pending_paint_event_rects;
+    String m_icon_path;
+    Vector<Rect, 32> m_pending_paint_event_rects;
     Size m_size_increment;
     Size m_base_size;
+    Color m_background_color { Color::LightGray };
+    GWindowType m_window_type { GWindowType::Normal };
     bool m_is_active { false };
     bool m_should_exit_app_on_close { false };
     bool m_has_alpha_channel { false };
     bool m_double_buffering_enabled { true };
     bool m_modal { false };
     bool m_resizable { true };
+    bool m_fullscreen { false };
 };
-

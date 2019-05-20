@@ -35,11 +35,12 @@ int main(int argc, char** argv)
 
 class LauncherButton final : public GButton {
 public:
-    LauncherButton(const String& icon_path, const String& exec_path, GWidget* parent)
+    LauncherButton(const String& name, const String& icon_path, const String& exec_path, GWidget* parent)
         : GButton(parent)
         , m_executable_path(exec_path)
     {
-        set_button_style(GButtonStyle::CoolBar);
+        set_tooltip(name);
+        set_button_style(ButtonStyle::CoolBar);
         set_icon(GraphicsBitmap::load_from_file(icon_path));
         set_preferred_size({ 50, 50 });
         set_size_policy(SizePolicy::Fixed, SizePolicy::Fixed);
@@ -69,10 +70,12 @@ GWindow* make_launcher_window()
     widget->layout()->set_margins({ 5, 5, 5, 5 });
     window->set_main_widget(widget);
 
-    new LauncherButton("/res/icons/Terminal.png", "/bin/Terminal", widget);
-    new LauncherButton("/res/icons/FontEditor.png", "/bin/FontEditor", widget);
-    new LauncherButton("/res/icons/32x32/filetype-folder.png", "/bin/FileManager", widget);
-    new LauncherButton("/res/icons/TextEditor.png", "/bin/TextEditor", widget);
+    new LauncherButton("Terminal", "/res/icons/Terminal.png", "/bin/Terminal", widget);
+    new LauncherButton("FontEditor", "/res/icons/FontEditor.png", "/bin/FontEditor", widget);
+    new LauncherButton("FileManager", "/res/icons/32x32/filetype-folder.png", "/bin/FileManager", widget);
+    new LauncherButton("TextEditor", "/res/icons/TextEditor.png", "/bin/TextEditor", widget);
+    new LauncherButton("VisualBuilder", "/res/icons/32x32/app-visual-builder.png", "/bin/VisualBuilder", widget);
+    new LauncherButton("IRCClient", "/res/icons/32x32/app-irc-client.png", "/bin/IRCClient", widget);
 
     return window;
 }

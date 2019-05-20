@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <AK/Types.h>
 #include <AK/StdLibExtras.h>
+#include "ctype.h"
 
 extern "C" {
 
@@ -89,6 +90,35 @@ int strncmp(const char* s1, const char* s2, size_t n)
             break;
     } while (--n);
     return 0;
+}
+
+int strcasecmp(const char* s1, const char* s2)
+{
+    int c1, c2;
+    for (;;) {
+        c1 = tolower(*s1++);
+        c2 = tolower(*s2++);
+        if (c1 == 0 || c1 != c2) {
+            return c1 - c2;
+        }
+    }
+}
+
+int strncasecmp(const char* s1, const char* s2, size_t n)
+{
+    if (n == 0) {
+        return 0;
+    }
+
+    while (n-- != 0 && tolower(*s1) == tolower(*s2)) {
+        if (n == 0 || *s1 == '\0' || *s2 == '\0') {
+            break;
+        }
+        s1++;
+        s2++;
+    }
+
+    return tolower(*s1) - tolower(*s2);
 }
 
 int memcmp(const void* v1, const void* v2, size_t n)
@@ -202,10 +232,10 @@ char* strchr(const char* str, int c)
 void* memchr(const void* ptr, int c, size_t size)
 {
     char ch = c;
-    char* cptr = (char*)ptr;
+    auto* cptr = (const char*)ptr;
     for (size_t i = 0; i < size; ++i) {
         if (cptr[i] == ch)
-            return cptr + i;
+            return const_cast<char*>(cptr + i);
     }
     return nullptr;
 }
@@ -358,7 +388,7 @@ char* strpbrk(const char* s, const char* accept)
 {
     while (*s)
         if(strchr(accept, *s++))
-            return (char*)--s;
+            return const_cast<char*>(--s);
     return nullptr;
 }
 
@@ -366,7 +396,22 @@ char *strtok(char* str, const char* delim)
 {
     (void)str;
     (void)delim;
-    assert(false);
+    ASSERT_NOT_REACHED();
+}
+
+int strcoll(const char* s1, const char* s2)
+{
+    return strcmp(s1, s2);
+}
+
+size_t strxfrm(char* dest, const char* src, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n && src[i] != '\0'; ++i)
+        dest[i] = src[i];
+    for ( ; i < n; ++i)
+        dest[i] = '\0';
+    return i;
 }
 
 }

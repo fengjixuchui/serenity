@@ -1,58 +1,57 @@
 #pragma once
 
-#include <AK/Badge.h>
-#include <AK/HashMap.h>
-#include <AK/OwnPtr.h>
-#include <AK/Vector.h>
-#include <AK/WeakPtr.h>
+#include <LibCore/CEventLoop.h>
 #include <WindowServer/WSAPITypes.h>
 #include <LibGUI/GEvent.h>
 
 class GAction;
-class GObject;
-class GNotifier;
+class CObject;
+class CNotifier;
 class GWindow;
 
-class GEventLoop {
+class GEventLoop final : public CEventLoop {
 public:
     GEventLoop();
-    ~GEventLoop();
+    virtual ~GEventLoop() override;
 
-    int exec();
+    static GEventLoop& current() { return static_cast<GEventLoop&>(CEventLoop::current()); }
 
-    void post_event(GObject& receiver, OwnPtr<GEvent>&&);
-
-    static GEventLoop& main();
-    static GEventLoop& current();
-
-    bool running() const { return m_running; }
-
-    static int register_timer(GObject&, int milliseconds, bool should_reload);
-    static bool unregister_timer(int timer_id);
-
-    static void register_notifier(Badge<GNotifier>, GNotifier&);
-    static void unregister_notifier(Badge<GNotifier>, GNotifier&);
-
-    void quit(int);
-
-    static bool post_message_to_server(const WSAPI_ClientMessage&);
+    static bool post_message_to_server(const WSAPI_ClientMessage&, const ByteBuffer& extra_data = { });
     bool wait_for_specific_event(WSAPI_ServerMessage::Type, WSAPI_ServerMessage&);
-
     WSAPI_ServerMessage sync_request(const WSAPI_ClientMessage& request, WSAPI_ServerMessage::Type response_type);
 
     static pid_t server_pid() { return s_server_pid; }
+    static int my_client_id() { return s_my_client_id; }
 
-    void take_pending_events_from(GEventLoop& other)
+    virtual void take_pending_events_from(CEventLoop& other) override
     {
-        m_queued_events.append(move(other.m_queued_events));
-        m_unprocessed_messages.append(move(other.m_unprocessed_messages));
+        CEventLoop::take_pending_events_from(other);
+        m_unprocessed_bundles.append(move(static_cast<GEventLoop&>(other).m_unprocessed_bundles));
     }
 
 private:
+    virtual void add_file_descriptors_for_select(fd_set& fds, int& max_fd_added) override
+    {
+        FD_SET(s_windowserver_fd, &fds);
+        max_fd_added = s_windowserver_fd;
+    }
+
+    virtual void process_file_descriptors_after_select(const fd_set& fds) override
+    {
+        if (FD_ISSET(s_windowserver_fd, &fds))
+            drain_messages_from_server();
+    }
+
+    virtual void do_processing() override
+    {
+        while (!m_unprocessed_bundles.is_empty())
+            process_unprocessed_bundles();
+    }
+
     void wait_for_event();
     bool drain_messages_from_server();
-    void process_unprocessed_messages();
-    void handle_paint_event(const WSAPI_ServerMessage&, GWindow&);
+    void process_unprocessed_bundles();
+    void handle_paint_event(const WSAPI_ServerMessage&, GWindow&, const ByteBuffer& extra_data);
     void handle_resize_event(const WSAPI_ServerMessage&, GWindow&);
     void handle_mouse_event(const WSAPI_ServerMessage&, GWindow&);
     void handle_key_event(const WSAPI_ServerMessage&, GWindow&);
@@ -60,37 +59,17 @@ private:
     void handle_window_close_request_event(const WSAPI_ServerMessage&, GWindow&);
     void handle_menu_event(const WSAPI_ServerMessage&);
     void handle_window_entered_or_left_event(const WSAPI_ServerMessage&, GWindow&);
-    void get_next_timer_expiration(timeval&);
+    void handle_wm_event(const WSAPI_ServerMessage&, GWindow&);
+    void handle_greeting(WSAPI_ServerMessage&);
     void connect_to_server();
 
-    struct QueuedEvent {
-        WeakPtr<GObject> receiver;
-        OwnPtr<GEvent> event;
+    struct IncomingWSMessageBundle {
+        WSAPI_ServerMessage message;
+        ByteBuffer extra_data;
     };
-    Vector<QueuedEvent> m_queued_events;
 
-    Vector<WSAPI_ServerMessage> m_unprocessed_messages;
-
-    bool m_running { false };
-    bool m_exit_requested { false };
-    int m_exit_code { 0 };
-
+    Vector<IncomingWSMessageBundle> m_unprocessed_bundles;
     static pid_t s_server_pid;
-    static pid_t s_event_fd;
-
-    struct EventLoopTimer {
-        int timer_id { 0 };
-        int interval { 0 };
-        timeval fire_time;
-        bool should_reload { false };
-        WeakPtr<GObject> owner;
-
-        void reload();
-        bool has_expired() const;
-    };
-
-    static HashMap<int, OwnPtr<EventLoopTimer>>* s_timers;
-    static int s_next_timer_id;
-
-    static HashTable<GNotifier*>* s_notifiers;
+    static int s_my_client_id;
+    static int s_windowserver_fd;
 };

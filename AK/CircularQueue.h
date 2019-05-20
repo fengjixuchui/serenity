@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Assertions.h"
-#include "Types.h"
+#include <AK/Assertions.h>
+#include <AK/Types.h>
 
 namespace AK {
 
@@ -14,19 +14,16 @@ public:
             m_elements[i] = T();
     }
 
+    void clear()
+    {
+        m_head = 0;
+        m_size = 0;
+    }
+
     bool is_empty() const { return !m_size; }
     int size() const { return m_size; }
 
     int capacity() const { return Capacity; }
-
-    void dump() const
-    {
-        kprintf("CircularQueue<%zu>:\n", Capacity);
-        kprintf(" size: %zu\n", m_size);
-        for (int i = 0; i < Capacity; ++i) {
-            kprintf(" [%zu] %d %c\n", i, m_elements[i], i == m_head ? '*' : ' ');
-        }
-    }
 
     void enqueue(const T& t)
     {
@@ -47,6 +44,9 @@ public:
     }
 
     const T& at(int index) const { return m_elements[(m_head + index) % Capacity]; }
+
+    const T& first() const { return at(0); }
+    const T& last() const { return at(size() - 1); }
 
     class ConstIterator {
     public:
@@ -69,6 +69,8 @@ public:
 
     ConstIterator begin() const { return ConstIterator(*this, m_head); }
     ConstIterator end() const { return ConstIterator(*this, size()); }
+
+    int head_index() const { return m_head; }
 
 private:
     friend class ConstIterator;

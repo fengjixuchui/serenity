@@ -1,10 +1,13 @@
+include ../Makefile.common
+
 AK_OBJS = \
     ../AK/StringImpl.o \
     ../AK/String.o \
+    ../AK/StringView.o \
     ../AK/StringBuilder.o \
     ../AK/FileSystemPath.o \
     ../AK/StdLibExtras.o \
-    ../AK/kmalloc.o
+    ../AK/MappedFile.o
 
 LIBC_OBJS = \
        SharedBuffer.o \
@@ -14,6 +17,7 @@ LIBC_OBJS = \
        strings.o \
        mman.o \
        dirent.o \
+       malloc.o \
        stdlib.o \
        time.o \
        utsname.o \
@@ -37,31 +41,26 @@ LIBC_OBJS = \
        sys/select.o \
        sys/socket.o \
        sys/wait.o \
+       sys/uio.o \
        poll.o \
        locale.o \
        arpa/inet.o \
        netdb.o \
-       crt0.o
+       sched.o
 
-ASM_OBJS = setjmp.no
+ASM_OBJS = setjmp.no crti.ao crtn.ao
 
 CPP_OBJS = $(AK_OBJS) $(WIDGETS_OBJS) $(LIBC_OBJS)
 
 LIBRARY = libc.a
-STANDARD_FLAGS = -std=c++17
-WARNING_FLAGS = -Wextra -Wall -Wundef -Wcast-qual -Wwrite-strings -Wimplicit-fallthrough
-FLAVOR_FLAGS = -fno-exceptions -fno-rtti
-OPTIMIZATION_FLAGS = -Os
-INCLUDE_FLAGS = -I.. -I.
+DEFINES += -DUSERLAND
 
-DEFINES = -DSERENITY -DUSERLAND -DSANITIZE_PTRS
+all: $(LIBRARY) startfiles
 
-CXXFLAGS = -MMD -MP $(WARNING_FLAGS) $(OPTIMIZATION_FLAGS) $(FLAVOR_FLAGS) $(STANDARD_FLAGS) $(INCLUDE_FLAGS) $(DEFINES)
-CXX = i686-pc-serenity-g++
-LD = i686-pc-serenity-ld
-AR = i686-pc-serenity-ar
-
-all: $(LIBRARY)
+startfiles:
+	@echo "CXX crt0.o"; $(CXX) $(CXXFLAGS) -o crt0.o -c crt0.cpp
+	cp crti.ao crti.o
+	cp crtn.ao crtn.o
 
 $(LIBRARY): $(CPP_OBJS) $(ASM_OBJS)
 	@echo "LIB $@"; $(AR) rcs $@ $(CPP_OBJS) $(ASM_OBJS)
@@ -72,8 +71,21 @@ $(LIBRARY): $(CPP_OBJS) $(ASM_OBJS)
 %.no: %.asm
 	@echo "NASM $@"; nasm -f elf -o $@ $<
 
+%.ao: %.S
+	@echo "AS $@"; $(AS) -o $@ $<
+
 -include $(OBJS:%.o=%.d)
 
 clean:
 	@echo "CLEAN"; rm -f $(LIBRARY) $(CPP_OBJS) $(ASM_OBJS) *.d
 
+install: $(LIBRARY)
+	mkdir -p ../Root/usr/include
+	mkdir -p ../Root/usr/lib
+	# Copy headers
+	rsync -r -a --include '*/' --include '*.h' --exclude '*' . ../Root/usr/include
+	# Install the library
+	cp $(LIBRARY) ../Root/usr/lib
+	cp crt0.o ../Root/usr/lib/
+	cp crti.ao ../Root/usr/lib/crti.o
+	cp crtn.ao ../Root/usr/lib/crtn.o

@@ -9,14 +9,16 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <AK/printf.cpp>
+#include <AK/StdLibExtras.h>
 #include <Kernel/Syscall.h>
 
 extern "C" {
 
-static FILE __default_streams[3];
+static FILE __default_streams[4];
 FILE* stdin;
 FILE* stdout;
 FILE* stderr;
+FILE* stddbg;
 
 void init_FILE(FILE& fp, int fd, int mode)
 {
@@ -39,9 +41,16 @@ void __stdio_init()
     stdin = &__default_streams[0];
     stdout = &__default_streams[1];
     stderr = &__default_streams[2];
+    stddbg = &__default_streams[3];
     init_FILE(*stdin, 0, isatty(0) ? _IOLBF : _IOFBF);
     init_FILE(*stdout, 1, isatty(1) ? _IOLBF : _IOFBF);
     init_FILE(*stderr, 2, _IONBF);
+    int fd = open("/dev/debuglog", O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
+        perror("open /dev/debuglog");
+        ASSERT_NOT_REACHED();
+    }
+    init_FILE(*stddbg, fd, _IOLBF);
 }
 
 int setvbuf(FILE* stream, char* buf, int mode, size_t size)
@@ -86,14 +95,19 @@ int feof(FILE* stream)
 
 int fflush(FILE* stream)
 {
-    // FIXME: Implement buffered streams, duh.
-    if (!stream)
-        return -EBADF;
+    // FIXME: fflush(NULL) should flush all open output streams.
+    ASSERT(stream);
     if (!stream->buffer_index)
         return 0;
     int rc = write(stream->fd, stream->buffer, stream->buffer_index);
     stream->buffer_index = 0;
-    return rc;
+    stream->error = 0;
+    stream->eof = 0;
+    if (rc < 0) {
+        stream->error = errno;
+        return EOF;
+    }
+    return 0;
 }
 
 char* fgets(char* buffer, int size, FILE* stream)
@@ -125,7 +139,7 @@ int fgetc(FILE* stream)
     size_t nread = fread(&ch, sizeof(char), 1, stream);
     if (nread <= 0) {
         stream->eof = nread == 0;
-        stream->error = -nread;
+        stream->error = errno;
         return EOF;
     }
     return ch;
@@ -141,9 +155,15 @@ int getchar()
     return getc(stdin);
 }
 
-int ungetc(int, FILE*)
+int ungetc(int c, FILE* stream)
 {
-    ASSERT_NOT_REACHED();
+    ASSERT(stream);
+    if (stream->have_ungotten)
+        return EOF;
+    stream->have_ungotten = true;
+    stream->ungotten = c;
+    stream->eof = false;
+    return c;
 }
 
 int fputc(int ch, FILE* stream)
@@ -155,7 +175,7 @@ int fputc(int ch, FILE* stream)
         fflush(stream);
     else if (stream->mode == _IONBF || (stream->mode == _IOLBF && ch == '\n'))
         fflush(stream);
-    if (stream->eof)
+    if (stream->eof || stream->error)
         return EOF;
     return (byte)ch;
 }
@@ -177,14 +197,14 @@ int fputs(const char* s, FILE* stream)
         if (rc == EOF)
             return EOF;
     }
-    return 0;
+    return 1;
 }
 
 int puts(const char* s)
 {
     int rc = fputs(s, stdout);
-    if (rc < 0)
-        return rc;
+    if (rc == EOF)
+        return EOF;
     return fputc('\n', stdout);
 }
 
@@ -192,7 +212,7 @@ void clearerr(FILE* stream)
 {
     assert(stream);
     stream->eof = false;
-    stream->error = false;
+    stream->error = 0;
 }
 
 int ferror(FILE* stream)
@@ -203,36 +223,66 @@ int ferror(FILE* stream)
 size_t fread(void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
     assert(stream);
-    ssize_t nread = read(stream->fd, ptr, nmemb * size);
-    if (nread < 0)
+    if (!size)
         return 0;
-    if (nread == 0)
+
+    ssize_t nread = 0;
+
+    if (stream->have_ungotten) {
+        // FIXME: Support ungotten character even if size != 1.
+        ASSERT(size == 1);
+        ((char*)ptr)[0] = stream->ungotten;
+        stream->have_ungotten = false;
+        --nmemb;
+        if (!nmemb)
+            return 1;
+        ptr = &((char*)ptr)[1];
+        ++nread;
+    }
+
+    ssize_t rc = read(stream->fd, ptr, nmemb * size);
+    if (rc < 0) {
+        stream->error = errno;
+        return 0;
+    }
+    if (rc == 0)
         stream->eof = true;
-    return nread;
+    nread += rc;
+    return nread / size;
 }
 
 size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream)
 {
     assert(stream);
-    fflush(stream);
-    ssize_t nwritten = write(stream->fd, ptr, nmemb * size);
-    if (nwritten < 0)
-        return 0;
-    return nwritten;
+    auto* bytes = (const byte*)ptr;
+    ssize_t nwritten = 0;
+    for (size_t i = 0; i < (size * nmemb); ++i) {
+        int rc = fputc(bytes[i], stream);
+        if (rc == EOF)
+            break;
+        ++nwritten;
+    }
+    return nwritten / size;
 }
 
 int fseek(FILE* stream, long offset, int whence)
 {
     assert(stream);
+    fflush(stream);
     off_t off = lseek(stream->fd, offset, whence);
     if (off < 0)
         return off;
+    stream->eof = false;
+    stream->error = 0;
+    stream->have_ungotten = false;
+    stream->ungotten = 0;
     return 0;
 }
 
 long ftell(FILE* stream)
 {
     assert(stream);
+    fflush(stream);
     return lseek(stream->fd, 0, SEEK_CUR);
 }
 
@@ -241,17 +291,16 @@ void rewind(FILE* stream)
     fseek(stream, 0, SEEK_SET);
 }
 
-static void sys_putch(char*&, char ch)
-{
-    syscall(SC_putch, ch);
-}
-
 int dbgprintf(const char* fmt, ...)
 {
+    // if this fails, you're printing too early.
+    ASSERT(stddbg);
+    int errno_backup = errno;
     va_list ap;
     va_start(ap, fmt);
-    int ret = printf_internal(sys_putch, nullptr, fmt, ap);
+    int ret = vfprintf(stddbg, fmt, ap);
     va_end(ap);
+    errno = errno_backup;
     return ret;
 }
 
@@ -375,11 +424,12 @@ FILE* freopen(const char* pathname, const char* mode, FILE* stream)
     (void)pathname;
     (void)mode;
     (void)stream;
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 FILE* fdopen(int fd, const char* mode)
 {
+    UNUSED_PARAM(mode);
     // FIXME: Verify that the mode matches how fd is already open.
     if (fd < 0)
         return nullptr;
@@ -388,6 +438,7 @@ FILE* fdopen(int fd, const char* mode)
 
 int fclose(FILE* stream)
 {
+    fflush(stream);
     int rc = close(stream->fd);
     free(stream);
     return rc;
@@ -395,25 +446,25 @@ int fclose(FILE* stream)
 
 int rename(const char* oldpath, const char* newpath)
 {
-    dbgprintf("FIXME(LibC): rename(%s, %s)\n", oldpath, newpath);
-    ASSERT_NOT_REACHED();
+    int rc = syscall(SC_rename, oldpath, newpath);
+    __RETURN_WITH_ERRNO(rc, rc, -1);
 }
 
 char* tmpnam(char*)
 {
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 FILE* popen(const char* command, const char* type)
 {
     (void)command;
     (void)type;
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 int pclose(FILE*)
 {
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 int remove(const char* pathname)

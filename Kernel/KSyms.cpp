@@ -1,6 +1,9 @@
 #include "KSyms.h"
 #include "Process.h"
 #include "Scheduler.h"
+#include <Kernel/FileSystem/FileDescriptor.h>
+#include <Kernel/ELF/ELFLoader.h>
+#include <AK/TemporaryChange.h>
 
 static KSym* s_ksyms;
 dword ksym_lowest_address;
@@ -29,6 +32,8 @@ const KSym* ksymbolicate(dword address)
 
 static void load_ksyms_from_data(const ByteBuffer& buffer)
 {
+    ksym_lowest_address = 0xffffffff;
+    ksym_highest_address = 0;
     auto* bufptr = (const char*)buffer.pointer();
     auto* start_of_name = bufptr;
     dword address = 0;
@@ -85,35 +90,58 @@ static void load_ksyms_from_data(const ByteBuffer& buffer)
         dword address;
         const KSym* ksym;
     };
-    Vector<RecognizedSymbol> recognized_symbols;
+    int max_recognized_symbol_count = 256;
+    RecognizedSymbol recognized_symbols[max_recognized_symbol_count];
+    int recognized_symbol_count = 0;
     if (use_ksyms) {
         for (dword* stack_ptr = (dword*)ebp; current->process().validate_read_from_kernel(LinearAddress((dword)stack_ptr)); stack_ptr = (dword*)*stack_ptr) {
             dword retaddr = stack_ptr[1];
-            if (auto* ksym = ksymbolicate(retaddr))
-                recognized_symbols.append({ retaddr, ksym });
+            recognized_symbols[recognized_symbol_count++] = { retaddr, ksymbolicate(retaddr) };
         }
-    } else{
+    } else {
         for (dword* stack_ptr = (dword*)ebp; current->process().validate_read_from_kernel(LinearAddress((dword)stack_ptr)); stack_ptr = (dword*)*stack_ptr) {
             dword retaddr = stack_ptr[1];
-            kprintf("%x (next: %x)\n", retaddr, stack_ptr ? (dword*)*stack_ptr : 0);
+            dbgprintf("%x (next: %x)\n", retaddr, stack_ptr ? (dword*)*stack_ptr : 0);
         }
         return;
     }
+    ASSERT(recognized_symbol_count < max_recognized_symbol_count);
     size_t bytes_needed = 0;
-    for (auto& symbol : recognized_symbols) {
-        bytes_needed += strlen(symbol.ksym->name) + 8 + 16;
+    for (int i = 0; i < recognized_symbol_count; ++i) {
+        auto& symbol = recognized_symbols[i];
+        bytes_needed += (symbol.ksym ? strlen(symbol.ksym->name) : 0) + 8 + 16;
     }
-    for (auto& symbol : recognized_symbols) {
+    for (int i = 0; i < recognized_symbol_count; ++i) {
+        auto& symbol = recognized_symbols[i];
+        if (!symbol.address)
+            break;
+        if (!symbol.ksym) {
+            if (current->process().elf_loader() && current->process().elf_loader()->has_symbols()) {
+                dbgprintf("%p  %s\n", symbol.address, current->process().elf_loader()->symbolicate(symbol.address).characters());
+            } else {
+                dbgprintf("%p (no ELF symbols for process)\n", symbol.address);
+            }
+            continue;
+        }
         unsigned offset = symbol.address - symbol.ksym->address;
-        kprintf("%p  %s +%u\n", symbol.address, symbol.ksym->name, offset);
+        if (symbol.ksym->address == ksym_highest_address && offset > 4096)
+            dbgprintf("%p\n", symbol.address);
+        else
+            dbgprintf("%p  %s +%u\n", symbol.address, symbol.ksym->name, offset);
     }
 }
 
-void dump_backtrace(bool use_ksyms)
+void dump_backtrace()
 {
+    static bool in_dump_backtrace = false;
+    if (in_dump_backtrace) {
+        dbgprintf("dump_backtrace() called from within itself, what the hell is going on!\n");
+        return;
+    }
+    TemporaryChange change(in_dump_backtrace, true);
     dword ebp;
     asm volatile("movl %%ebp, %%eax":"=a"(ebp));
-    dump_backtrace_impl(ebp, use_ksyms);
+    dump_backtrace_impl(ebp, ksyms_ready);
 }
 
 void init_ksyms()
@@ -129,7 +157,7 @@ void load_ksyms()
     auto result = VFS::the().open("/kernel.map", 0, 0, *VFS::the().root_inode());
     ASSERT(!result.is_error());
     auto descriptor = result.value();
-    auto buffer = descriptor->read_entire_file(current->process());
+    auto buffer = descriptor->read_entire_file();
     ASSERT(buffer);
     load_ksyms_from_data(buffer);
 }

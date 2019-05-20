@@ -5,25 +5,26 @@
 #include <AK/WeakPtr.h>
 #include <SharedGraphics/Rect.h>
 #include <WindowServer/WSMenuItem.h>
-#include <WindowServer/WSMessageReceiver.h>
+#include <LibCore/CObject.h>
 
 class WSClientConnection;
 class WSMenuBar;
-class WSMessage;
+class WSEvent;
 class WSWindow;
 class Font;
 
-class WSMenu final : public WSMessageReceiver {
+class WSMenu final : public CObject {
 public:
-    WSMenu(WSClientConnection*, int menu_id, String&& name);
+    WSMenu(WSClientConnection*, int menu_id, const String& name);
     virtual ~WSMenu() override;
 
     WSClientConnection* client() { return m_client; }
     const WSClientConnection* client() const { return m_client; }
     int menu_id() const { return m_menu_id; }
 
-    WSMenuBar* menu_bar() { return m_menubar; }
-    const WSMenuBar* menu_bar() const { return m_menubar; }
+    WSMenuBar* menubar() { return m_menubar; }
+    const WSMenuBar* menubar() const { return m_menubar; }
+    void set_menubar(WSMenuBar* menubar) { m_menubar = menubar; }
 
     bool is_empty() const { return m_items.is_empty(); }
     int item_count() const { return m_items.size(); }
@@ -53,8 +54,8 @@ public:
     int width() const;
     int height() const;
 
-    int item_height() const { return 18; }
-    int vertical_padding() const { return 4; }
+    int item_height() const { return 16; }
+    int frame_thickness() const { return 3; }
     int horizontal_padding() const { return left_padding() + right_padding(); }
     int left_padding() const { return 14; }
     int right_padding() const { return 14; }
@@ -62,6 +63,7 @@ public:
     void draw();
     const Font& font() const;
 
+    WSMenuItem* item_with_identifier(unsigned);
     WSMenuItem* item_at(const Point&);
     void redraw();
 
@@ -72,8 +74,10 @@ public:
 
     void close();
 
+    void popup(const Point&);
+
 private:
-    virtual void on_message(WSMessage&) override;
+    virtual void event(CEvent&) override;
 
     int padding_between_text_and_shortcut() const { return 50; }
     void did_activate(WSMenuItem&);

@@ -1,33 +1,25 @@
 #pragma once
 
-#include "types.h"
-#include "TTY.h"
-#include "Syscall.h"
-#include <Kernel/VirtualFileSystem.h>
-#include <Kernel/UnixTypes.h>
+#include <AK/Types.h>
 #include <AK/InlineLinkedList.h>
 #include <AK/AKString.h>
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <AK/Weakable.h>
+#include <Kernel/FileSystem/VirtualFileSystem.h>
+#include <Kernel/VM/RangeAllocator.h>
+#include <Kernel/TTY/TTY.h>
+#include <Kernel/Syscall.h>
+#include <Kernel/UnixTypes.h>
 #include <Kernel/Thread.h>
 #include <Kernel/Lock.h>
 
+class ELFLoader;
 class FileDescriptor;
 class PageDirectory;
 class Region;
 class VMObject;
-class Zone;
-class WSWindow;
-class GraphicsBitmap;
-
-#define COOL_GLOBALS
-#ifdef COOL_GLOBALS
-struct CoolGlobals {
-    pid_t current_pid;
-};
-extern CoolGlobals* g_cool_globals;
-#endif
+class ProcessTracer;
 
 void kgettimeofday(timeval&);
 
@@ -43,6 +35,7 @@ public:
     static Vector<Process*> all_processes();
 
     enum Priority {
+        IdlePriority,
         LowPriority,
         NormalPriority,
         HighPriority,
@@ -99,6 +92,9 @@ public:
 
     int sys$gettid();
     int sys$donate(int tid);
+    int sys$shm_open(const char* name, int flags, mode_t);
+    int sys$shm_unlink(const char* name);
+    int sys$ftruncate(int fd, off_t);
     pid_t sys$setsid();
     pid_t sys$getsid(pid_t);
     int sys$setpgid(pid_t pid, pid_t pgid);
@@ -115,6 +111,7 @@ public:
     int sys$close(int fd);
     ssize_t sys$read(int fd, byte*, ssize_t);
     ssize_t sys$write(int fd, const byte*, ssize_t);
+    ssize_t sys$writev(int fd, const struct iovec* iov, int iov_count);
     int sys$fstat(int fd, stat*);
     int sys$lstat(const char*, stat*);
     int sys$stat(const char*, stat*);
@@ -178,9 +175,13 @@ public:
     ssize_t sys$recvfrom(const Syscall::SC_recvfrom_params*);
     int sys$getsockopt(const Syscall::SC_getsockopt_params*);
     int sys$setsockopt(const Syscall::SC_setsockopt_params*);
+    int sys$getsockname(int sockfd, sockaddr* addr, socklen_t* addrlen);
     int sys$restore_signal_mask(dword mask);
     int sys$create_thread(int(*)(void*), void*);
-
+    void sys$exit_thread(int code);
+    int sys$rename(const char* oldpath, const char* newpath);
+    int sys$systrace(pid_t);
+    int sys$mknod(const char* pathname, mode_t, dev_t);
     int sys$create_shared_buffer(pid_t peer_pid, int, void** buffer);
     void* sys$get_shared_buffer(int shared_buffer_id);
     int sys$release_shared_buffer(int shared_buffer_id);
@@ -198,6 +199,9 @@ public:
     size_t region_count() const { return m_regions.size(); }
     const Vector<Retained<Region>>& regions() const { return m_regions; }
     void dump_regions();
+
+    ProcessTracer* tracer() { return m_tracer.ptr(); }
+    ProcessTracer& ensure_tracer();
 
     dword m_ticks_in_user { 0 };
     dword m_ticks_in_kernel { 0 };
@@ -241,6 +245,13 @@ public:
 
     int thread_count() const;
 
+    Lock& big_lock() { return m_big_lock; }
+
+    unsigned syscall_count() const { return m_syscall_count; }
+    void did_syscall() { ++m_syscall_count; }
+
+    const ELFLoader* elf_loader() const { return m_elf_loader.ptr(); }
+
 private:
     friend class MemoryManager;
     friend class Scheduler;
@@ -248,9 +259,12 @@ private:
 
     Process(String&& name, uid_t, gid_t, pid_t ppid, RingLevel, RetainPtr<Inode>&& cwd = nullptr, RetainPtr<Inode>&& executable = nullptr, TTY* = nullptr, Process* fork_parent = nullptr);
 
-    int do_exec(String path, Vector<String> arguments, Vector<String> environment);
+    Range allocate_range(LinearAddress, size_t);
 
-    int alloc_fd();
+    int do_exec(String path, Vector<String> arguments, Vector<String> environment);
+    ssize_t do_write(FileDescriptor&, const byte*, int data_size);
+
+    int alloc_fd(int first_candidate_fd = 0);
     void disown_all_shared_buffers();
 
     void create_signal_trampolines_if_needed();
@@ -276,15 +290,15 @@ private:
 
     struct FileDescriptorAndFlags {
         operator bool() const { return !!descriptor; }
-        void clear() { descriptor = nullptr; flags = 0; }
-        void set(Retained<FileDescriptor>&& d, dword f = 0) { descriptor = move(d); flags = f; }
+        void clear();
+        void set(Retained<FileDescriptor>&& d, dword f = 0);
         RetainPtr<FileDescriptor> descriptor;
         dword flags { 0 };
     };
     Vector<FileDescriptorAndFlags> m_fds;
     RingLevel m_ring { Ring0 };
 
-    int m_max_open_file_descriptors { 16 };
+    int m_max_open_file_descriptors { 128 };
 
     byte m_termination_status { 0 };
     byte m_termination_signal { 0 };
@@ -297,9 +311,6 @@ private:
     Region* region_from_range(LinearAddress, size_t);
 
     Vector<Retained<Region>> m_regions;
-
-    // FIXME: Implement some kind of ASLR?
-    LinearAddress m_next_region;
 
     LinearAddress m_return_to_ring3_from_signal_trampoline;
     LinearAddress m_return_to_ring0_from_signal_trampoline;
@@ -315,6 +326,14 @@ private:
     bool m_dead { false };
 
     int m_next_tid { 0 };
+
+    unsigned m_syscall_count { 0 };
+
+    RetainPtr<ProcessTracer> m_tracer;
+    OwnPtr<ELFLoader> m_elf_loader;
+    RangeAllocator m_range_allocator;
+
+    Lock m_big_lock { "Process" };
 };
 
 class ProcessInspectionHandle {
@@ -385,7 +404,15 @@ inline void Process::for_each_thread(Callback callback) const
 {
     InterruptDisabler disabler;
     pid_t my_pid = pid();
-    for (auto* thread = g_threads->head(); thread;) {
+    for (auto* thread = g_runnable_threads->head(); thread;) {
+        auto* next_thread = thread->next();
+        if (thread->pid() == my_pid) {
+            if (callback(*thread) == IterationDecision::Abort)
+                break;
+        }
+        thread = next_thread;
+    }
+    for (auto* thread = g_nonrunnable_threads->head(); thread;) {
         auto* next_thread = thread->next();
         if (thread->pid() == my_pid) {
             if (callback(*thread) == IterationDecision::Abort)

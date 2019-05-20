@@ -20,11 +20,13 @@ struct WSAPI_Rect {
     WSAPI_Size size;
 };
 
-struct WSAPI_WindowParameters {
-    WSAPI_Rect rect;
-    Color background_color;
-    unsigned flags { 0 };
-    char title[128];
+enum WSAPI_WindowType {
+    Invalid = 0,
+    Normal,
+    Menu,
+    WindowSwitcher,
+    Taskbar,
+    Tooltip,
 };
 
 struct WSAPI_WindowBackingStoreInfo {
@@ -47,6 +49,22 @@ struct WSAPI_KeyModifiers { enum {
     Ctrl  = 1 << 2,
 }; };
 
+enum class WSAPI_StandardCursor : unsigned char {
+    None = 0,
+    Arrow,
+    IBeam,
+    ResizeHorizontal,
+    ResizeVertical,
+    ResizeDiagonalTLBR,
+    ResizeDiagonalBLTR,
+};
+
+enum WSAPI_WMEventMask : unsigned {
+    WindowRectChanges = 1 << 0,
+    WindowStateChanges = 1 << 1,
+    WindowIconChanges = 1 << 2,
+    WindowRemovals = 1 << 3,
+};
 
 struct WSAPI_ServerMessage {
     enum Type : unsigned {
@@ -55,7 +73,9 @@ struct WSAPI_ServerMessage {
         Paint,
         MouseMove,
         MouseDown,
+        MouseDoubleClick,
         MouseUp,
+        MouseWheel,
         WindowEntered,
         WindowLeft,
         KeyDown,
@@ -73,6 +93,7 @@ struct WSAPI_ServerMessage {
         DidSetApplicationMenubar,
         DidAddMenuItem,
         DidAddMenuSeparator,
+        DidUpdateMenuItem,
         DidCreateWindow,
         DidDestroyWindow,
         DidGetWindowTitle,
@@ -84,23 +105,51 @@ struct WSAPI_ServerMessage {
         DidSetWindowBackingStore,
         DidSetWallpaper,
         DidGetWallpaper,
+        DidSetWindowHasAlphaChannel,
+        ScreenRectChanged,
+        WM_WindowRemoved,
+        WM_WindowStateChanged,
+        WM_WindowRectChanged,
+        WM_WindowIconChanged,
     };
     Type type { Invalid };
     int window_id { -1 };
-    int text_length { 0 };
-    char text[256];
+    unsigned extra_size { 0 };
+
+    union {
+        int text_length { 0 };
+        int rect_count;
+    };
+
+    static const int max_inline_rect_count = 32;
+    union {
+        char text[512];
+        WSAPI_Rect rects[32];
+    };
     int value { 0 };
 
     union {
         struct {
             int server_pid;
+            int your_client_id;
+            WSAPI_Rect screen_rect;
         } greeting;
+        struct {
+            int client_id;
+            int window_id;
+            WSAPI_Rect rect;
+            bool is_active;
+            bool is_minimized;
+            WSAPI_WindowType window_type;
+        } wm;
+        struct {
+            WSAPI_Rect rect;
+        } screen;
         struct {
             WSAPI_Rect rect;
             WSAPI_Rect old_rect;
         } window;
         struct {
-            WSAPI_Rect rect;
             WSAPI_Size window_size;
         } paint;
         struct {
@@ -108,6 +157,7 @@ struct WSAPI_ServerMessage {
             WSAPI_MouseButton button;
             unsigned buttons;
             byte modifiers;
+            int wheel_delta;
         } mouse;
         struct {
             char character;
@@ -147,6 +197,7 @@ struct WSAPI_ClientMessage {
         SetApplicationMenubar,
         AddMenuItem,
         AddMenuSeparator,
+        UpdateMenuItem,
         CreateWindow,
         DestroyWindow,
         SetWindowTitle,
@@ -164,11 +215,28 @@ struct WSAPI_ClientMessage {
         Greeting,
         SetWallpaper,
         GetWallpaper,
+        SetWindowOverrideCursor,
+        WM_SetActiveWindow,
+        WM_SetWindowMinimized,
+        WM_StartWindowResize,
+        PopupMenu,
+        DismissMenu,
+        SetWindowIcon,
+        SetWindowHasAlphaChannel,
     };
     Type type { Invalid };
     int window_id { -1 };
-    int text_length { 0 };
-    char text[256];
+    unsigned extra_size { 0 };
+    union {
+        int text_length { 0 };
+        int rect_count;
+    };
+
+    static const int max_inline_rect_count = 32;
+    union {
+        char text[512];
+        WSAPI_Rect rects[max_inline_rect_count];
+    };
     int value { 0 };
 
     union {
@@ -176,20 +244,32 @@ struct WSAPI_ClientMessage {
             int client_pid;
         } greeting;
         struct {
+            int client_id;
+            int window_id;
+            bool minimized;
+        } wm;
+        struct {
             int menubar_id;
             int menu_id;
             unsigned identifier;
             char shortcut_text[32];
             int shortcut_text_length;
+            bool enabled;
+            bool checkable;
+            bool checked;
+            WSAPI_Point position;
         } menu;
         struct {
             WSAPI_Rect rect;
             bool has_alpha_channel;
             bool modal;
             bool resizable;
+            bool fullscreen;
+            WSAPI_WindowType type;
             float opacity;
             WSAPI_Size base_size;
             WSAPI_Size size_increment;
+            WSAPI_Color background_color;
         } window;
         struct {
             WSAPI_Size size;
@@ -203,6 +283,9 @@ struct WSAPI_ClientMessage {
             int shared_buffer_id;
             int contents_size;
         } clipboard;
+        struct {
+            WSAPI_StandardCursor cursor;
+        } cursor;
     };
 };
 

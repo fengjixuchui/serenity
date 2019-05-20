@@ -1,10 +1,11 @@
 #include "Scheduler.h"
 #include "Process.h"
-#include "system.h"
 #include "RTC.h"
 #include "i8253.h"
 #include <AK/TemporaryChange.h>
 #include <Kernel/Alarm.h>
+#include <Kernel/FileSystem/FileDescriptor.h>
+#include <Kernel/Devices/PCSpeaker.h>
 
 //#define LOG_EVERY_CONTEXT_SWITCH
 //#define SCHEDULER_DEBUG
@@ -19,6 +20,8 @@ static dword time_slice_for(Process::Priority priority)
         return 15;
     case Process::LowPriority:
         return 5;
+    case Process::IdlePriority:
+        return 1;
     }
     ASSERT_NOT_REACHED();
 }
@@ -27,6 +30,8 @@ Thread* current;
 Thread* g_last_fpu_thread;
 Thread* g_finalizer;
 static Process* s_colonel_process;
+qword g_uptime;
+static qword s_beep_timeout;
 
 struct TaskRedirectionData {
     word selector;
@@ -38,6 +43,12 @@ static bool s_active;
 bool Scheduler::is_active()
 {
     return s_active;
+}
+
+void Scheduler::beep()
+{
+    PCSpeaker::tone_on(440);
+    s_beep_timeout = g_uptime + 100;
 }
 
 bool Scheduler::pick_next()
@@ -61,11 +72,11 @@ bool Scheduler::pick_next()
     auto now_usec = now.tv_usec;
 
     // Check and unblock threads whose wait conditions have been met.
-    Thread::for_each([&] (Thread& thread) {
+    Thread::for_each_nonrunnable([&] (Thread& thread) {
         auto& process = thread.process();
 
         if (thread.state() == Thread::BlockedSleep) {
-            if (thread.wakeup_time() <= system.uptime)
+            if (thread.wakeup_time() <= g_uptime)
                 thread.unblock();
             return IterationDecision::Continue;
         }
@@ -85,35 +96,35 @@ bool Scheduler::pick_next()
         }
 
         if (thread.state() == Thread::BlockedRead) {
-            ASSERT(thread.m_blocked_fd != -1);
+            ASSERT(thread.m_blocked_descriptor);
             // FIXME: Block until the amount of data wanted is available.
-            if (process.m_fds[thread.m_blocked_fd].descriptor->can_read(process))
+            if (thread.m_blocked_descriptor->can_read())
                 thread.unblock();
             return IterationDecision::Continue;
         }
 
         if (thread.state() == Thread::BlockedWrite) {
-            ASSERT(thread.m_blocked_fd != -1);
-            if (process.m_fds[thread.m_blocked_fd].descriptor->can_write(process))
+            ASSERT(thread.m_blocked_descriptor != -1);
+            if (thread.m_blocked_descriptor->can_write())
                 thread.unblock();
             return IterationDecision::Continue;
         }
 
         if (thread.state() == Thread::BlockedConnect) {
-            ASSERT(thread.m_blocked_socket);
-            if (thread.m_blocked_socket->is_connected())
+            auto& descriptor = *thread.m_blocked_descriptor;
+            auto& socket = *descriptor.socket();
+            if (socket.is_connected())
                 thread.unblock();
             return IterationDecision::Continue;
         }
 
         if (thread.state() == Thread::BlockedReceive) {
-            ASSERT(thread.m_blocked_socket);
-            auto& socket = *thread.m_blocked_socket;
+            auto& descriptor = *thread.m_blocked_descriptor;
+            auto& socket = *descriptor.socket();
             // FIXME: Block until the amount of data wanted is available.
             bool timed_out = now_sec > socket.receive_deadline().tv_sec || (now_sec == socket.receive_deadline().tv_sec && now_usec >= socket.receive_deadline().tv_usec);
-            if (timed_out || socket.can_read(SocketRole::None)) {
+            if (timed_out || descriptor.can_read()) {
                 thread.unblock();
-                thread.m_blocked_socket = nullptr;
                 return IterationDecision::Continue;
             }
             return IterationDecision::Continue;
@@ -127,13 +138,13 @@ bool Scheduler::pick_next()
                 }
             }
             for (int fd : thread.m_select_read_fds) {
-                if (process.m_fds[fd].descriptor->can_read(process)) {
+                if (process.m_fds[fd].descriptor->can_read()) {
                     thread.unblock();
                     return IterationDecision::Continue;
                 }
             }
             for (int fd : thread.m_select_write_fds) {
-                if (process.m_fds[fd].descriptor->can_write(process)) {
+                if (process.m_fds[fd].descriptor->can_write()) {
                     thread.unblock();
                     return IterationDecision::Continue;
                 }
@@ -212,20 +223,27 @@ bool Scheduler::pick_next()
     });
 
 #ifdef SCHEDULER_DEBUG
-    dbgprintf("Scheduler choices:\n");
-    for (auto* thread = g_threads->head(); thread; thread = thread->next()) {
-        //if (process->state() == Thread::BlockedWait || process->state() == Thread::BlockedSleep)
-//            continue;
+    dbgprintf("Non-runnables:\n");
+    for (auto* thread = g_nonrunnable_threads->head(); thread; thread = thread->next()) {
+        auto* process = &thread->process();
+        dbgprintf("[K%x] % 12s %s(%u:%u) @ %w:%x\n", process, to_string(thread->state()), process->name().characters(), process->pid(), thread->tid(), thread->tss().cs, thread->tss().eip);
+    }
+
+    dbgprintf("Runnables:\n");
+    for (auto* thread = g_runnable_threads->head(); thread; thread = thread->next()) {
         auto* process = &thread->process();
         dbgprintf("[K%x] % 12s %s(%u:%u) @ %w:%x\n", process, to_string(thread->state()), process->name().characters(), process->pid(), thread->tid(), thread->tss().cs, thread->tss().eip);
     }
 #endif
 
-    auto* previous_head = g_threads->head();
+    if (g_runnable_threads->is_empty())
+        return context_switch(s_colonel_process->main_thread());
+
+    auto* previous_head = g_runnable_threads->head();
     for (;;) {
         // Move head to tail.
-        g_threads->append(g_threads->remove_head());
-        auto* thread = g_threads->head();
+        g_runnable_threads->append(g_runnable_threads->remove_head());
+        auto* thread = g_runnable_threads->head();
 
         if (!thread->process().is_being_inspected() && (thread->state() == Thread::Runnable || thread->state() == Thread::Running)) {
 #ifdef SCHEDULER_DEBUG
@@ -243,11 +261,14 @@ bool Scheduler::pick_next()
 
 bool Scheduler::donate_to(Thread* beneficiary, const char* reason)
 {
+    InterruptDisabler disabler;
+    if (!Thread::is_thread(beneficiary))
+        return false;
+
     (void)reason;
     unsigned ticks_left = current->ticks_left();
-    if (!beneficiary || beneficiary->state() != Thread::Runnable || ticks_left <= 1) {
+    if (!beneficiary || beneficiary->state() != Thread::Runnable || ticks_left <= 1)
         return yield();
-    }
 
     unsigned ticks_to_donate = min(ticks_left - 1, time_slice_for(beneficiary->process().priority()));
 #ifdef SCHEDULER_DEBUG
@@ -256,7 +277,7 @@ bool Scheduler::donate_to(Thread* beneficiary, const char* reason)
     context_switch(*beneficiary);
     beneficiary->set_ticks_left(ticks_to_donate);
     switch_now();
-    return 0;
+    return false;
 }
 
 bool Scheduler::yield()
@@ -266,11 +287,11 @@ bool Scheduler::yield()
 //    dbgprintf("%s(%u:%u) yield()\n", current->process().name().characters(), current->pid(), current->tid());
 
     if (!pick_next())
-        return 1;
+        return false;
 
 //    dbgprintf("yield() jumping to new process: sel=%x, %s(%u:%u)\n", current->far_ptr().selector, current->process().name().characters(), current->pid(), current->tid());
     switch_now();
-    return 0;
+    return true;
 }
 
 void Scheduler::pick_next_and_switch_now()
@@ -315,10 +336,6 @@ bool Scheduler::context_switch(Thread& thread)
 
     current = &thread;
     thread.set_state(Thread::Running);
-
-#ifdef COOL_GLOBALS
-    g_cool_globals->current_pid = thread.process().pid();
-#endif
 
     if (!thread.selector()) {
         thread.set_selector(gdt_alloc_entry());
@@ -382,7 +399,7 @@ void Scheduler::initialize()
     initialize_redirection();
     s_colonel_process = Process::create_kernel_process("colonel", nullptr);
     // Make sure the colonel uses a smallish time slice.
-    s_colonel_process->set_priority(Process::LowPriority);
+    s_colonel_process->set_priority(Process::IdlePriority);
     load_task_register(s_redirection.selector);
 }
 
@@ -391,7 +408,12 @@ void Scheduler::timer_tick(RegisterDump& regs)
     if (!current)
         return;
 
-    system.uptime++;
+    ++g_uptime;
+
+    if (s_beep_timeout && g_uptime > s_beep_timeout) {
+        PCSpeaker::tone_off();
+        s_beep_timeout = 0;
+    }
 
     if (current->tick())
         return;

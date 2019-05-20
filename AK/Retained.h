@@ -4,7 +4,7 @@
 
 #ifdef __clang__
 #define CONSUMABLE(initial_state) __attribute__((consumable(initial_state)))
-#define CALLABLE_WHEN(state) __attribute__((callable_when(state)))
+#define CALLABLE_WHEN(...) __attribute__((callable_when(__VA_ARGS__)))
 #define SET_TYPESTATE(state) __attribute__((set_typestate(state)))
 #define RETURN_TYPESTATE(state) __attribute__((return_typestate(state)))
 #else
@@ -35,6 +35,7 @@ class CONSUMABLE(unconsumed) Retained {
 public:
     enum AdoptTag { Adopt };
 
+    RETURN_TYPESTATE(unconsumed) Retained(const T& object) : m_ptr(const_cast<T*>(&object)) { m_ptr->retain(); }
     RETURN_TYPESTATE(unconsumed) Retained(T& object) : m_ptr(&object) { m_ptr->retain(); }
     template<typename U> RETURN_TYPESTATE(unconsumed) Retained(U& object) : m_ptr(&static_cast<T&>(object)) { m_ptr->retain(); }
     RETURN_TYPESTATE(unconsumed) Retained(AdoptTag, T& object) : m_ptr(&object) { }
@@ -105,6 +106,9 @@ public:
 
     CALLABLE_WHEN(unconsumed) T& operator*() { ASSERT(m_ptr); return *m_ptr; }
     CALLABLE_WHEN(unconsumed) const T& operator*() const { ASSERT(m_ptr); return *m_ptr; }
+
+    CALLABLE_WHEN(unconsumed) operator T*() { ASSERT(m_ptr); return m_ptr; }
+    CALLABLE_WHEN(unconsumed) operator const T*() const { ASSERT(m_ptr); return m_ptr; }
 
 private:
     Retained() { }

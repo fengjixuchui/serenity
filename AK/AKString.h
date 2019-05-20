@@ -1,11 +1,12 @@
 #pragma once
 
-#include "ByteBuffer.h"
-#include "RetainPtr.h"
-#include "StringImpl.h"
-#include "Traits.h"
-#include "Vector.h"
-#include "kstdio.h"
+#include <AK/ByteBuffer.h>
+#include <AK/RetainPtr.h>
+#include <AK/StringImpl.h>
+#include <AK/Traits.h>
+#include <AK/Vector.h>
+#include <AK/StringView.h>
+#include <AK/kstdio.h>
 
 namespace AK {
 
@@ -14,6 +15,12 @@ public:
     ~String() { }
 
     String() { }
+
+    String(StringView view)
+        : m_impl(StringImpl::create(view.characters(), view.length()))
+    {
+    }
+
     String(const String& other)
         : m_impl(const_cast<String&>(other).m_impl.copy_ref())
     {
@@ -39,6 +46,11 @@ public:
     {
     }
 
+    String(const StringImpl* impl)
+        : m_impl(const_cast<StringImpl*>(impl))
+    {
+    }
+
     String(RetainPtr<StringImpl>&& impl)
         : m_impl(move(impl))
     {
@@ -49,6 +61,9 @@ public:
     {
     }
 
+    static String repeated(char, int count);
+
+    int to_int(bool& ok) const;
     unsigned to_uint(bool& ok) const;
 
     String to_lowercase() const
@@ -66,7 +81,10 @@ public:
     }
 
     Vector<String> split(char separator) const;
-    String substring(ssize_t start, ssize_t length) const;
+    String substring(int start, int length) const;
+
+    Vector<StringView> split_view(char separator) const;
+    StringView substring_view(int start, int length) const;
 
     bool is_null() const { return !m_impl; }
     bool is_empty() const { return length() == 0; }
@@ -102,13 +120,37 @@ public:
     }
 
     ByteBuffer to_byte_buffer() const;
-    static String from_byte_buffer(const ByteBuffer&);
+
+    template<typename BufferType>
+    static String copy(const BufferType& buffer, ShouldChomp should_chomp = NoChomp)
+    {
+        if (buffer.is_null())
+            return { };
+        if (buffer.is_empty())
+            return empty();
+        return String((const char*)buffer.data(), buffer.size(), should_chomp);
+    }
 
     static String format(const char*, ...);
+
+    StringView view() const { return { characters(), length() }; }
 
 private:
     RetainPtr<StringImpl> m_impl;
 };
+
+inline bool StringView::operator==(const String& string) const
+{
+    if (string.is_null())
+        return !m_characters;
+    if (!m_characters)
+        return false;
+    if (m_length != string.length())
+        return false;
+    if (m_characters == string.characters())
+        return true;
+    return !memcmp(m_characters, string.characters(), m_length);
+}
 
 template<>
 struct Traits<String> {

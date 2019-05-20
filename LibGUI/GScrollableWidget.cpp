@@ -2,11 +2,12 @@
 #include <LibGUI/GScrollBar.h>
 
 GScrollableWidget::GScrollableWidget(GWidget* parent)
-    : GWidget(parent)
+    : GFrame(parent)
 {
     m_vertical_scrollbar = new GScrollBar(Orientation::Vertical, this);
     m_vertical_scrollbar->set_step(4);
     m_vertical_scrollbar->on_change = [this] (int) {
+        did_scroll();
         update();
     };
 
@@ -14,6 +15,7 @@ GScrollableWidget::GScrollableWidget(GWidget* parent)
     m_horizontal_scrollbar->set_step(4);
     m_horizontal_scrollbar->set_big_step(30);
     m_horizontal_scrollbar->on_change = [this] (int) {
+        did_scroll();
         update();
     };
 
@@ -25,27 +27,34 @@ GScrollableWidget::~GScrollableWidget()
 {
 }
 
+void GScrollableWidget::mousewheel_event(GMouseEvent& event)
+{
+    // FIXME: The wheel delta multiplier should probably come from... somewhere?
+    vertical_scrollbar().set_value(vertical_scrollbar().value() + event.wheel_delta() * 20);
+}
+
 void GScrollableWidget::resize_event(GResizeEvent& event)
 {
+    auto inner_rect = frame_inner_rect_for_size(event.size());
     update_scrollbar_ranges();
 
-    int height_wanted_by_horizontal_scrollbar = m_horizontal_scrollbar->is_visible() ? m_horizontal_scrollbar->height() : 0;
-    int width_wanted_by_vertical_scrollbar = m_vertical_scrollbar->is_visible() ? m_vertical_scrollbar->width() : 0;
+    int height_wanted_by_horizontal_scrollbar = m_horizontal_scrollbar->is_visible() ? m_horizontal_scrollbar->preferred_size().height() : 0;
+    int width_wanted_by_vertical_scrollbar = m_vertical_scrollbar->is_visible() ? m_vertical_scrollbar->preferred_size().width() : 0;
 
-    m_vertical_scrollbar->set_relative_rect(event.size().width() - m_vertical_scrollbar->preferred_size().width(), 0, m_vertical_scrollbar->preferred_size().width(), event.size().height() - height_wanted_by_horizontal_scrollbar);
-    m_horizontal_scrollbar->set_relative_rect(0, event.size().height() - m_horizontal_scrollbar->preferred_size().height(), event.size().width() - m_vertical_scrollbar->preferred_size().width(), width_wanted_by_vertical_scrollbar);
+    m_vertical_scrollbar->set_relative_rect(inner_rect.right() + 1 - m_vertical_scrollbar->preferred_size().width(), inner_rect.top(), m_vertical_scrollbar->preferred_size().width(), inner_rect.height() - height_wanted_by_horizontal_scrollbar);
+    m_horizontal_scrollbar->set_relative_rect(inner_rect.left(), inner_rect.bottom() + 1 - m_horizontal_scrollbar->preferred_size().height(), inner_rect.width() - m_vertical_scrollbar->preferred_size().width(), width_wanted_by_vertical_scrollbar);
 
     m_corner_widget->set_visible(m_vertical_scrollbar->is_visible() && m_horizontal_scrollbar->is_visible());
     if (m_corner_widget->is_visible()) {
-        Rect corner_rect { m_horizontal_scrollbar->rect().right() + 1, m_vertical_scrollbar->rect().bottom() + 1, height_occupied_by_horizontal_scrollbar(), width_occupied_by_vertical_scrollbar() };
+        Rect corner_rect { m_horizontal_scrollbar->relative_rect().right() + 1, m_vertical_scrollbar->relative_rect().bottom() + 1, width_occupied_by_vertical_scrollbar(), height_occupied_by_horizontal_scrollbar() };
         m_corner_widget->set_relative_rect(corner_rect);
     }
 }
 
 Size GScrollableWidget::available_size() const
 {
-    int available_width = width() - m_size_occupied_by_fixed_elements.width() - width_occupied_by_vertical_scrollbar();
-    int available_height = height() - m_size_occupied_by_fixed_elements.height() - height_occupied_by_horizontal_scrollbar();
+    int available_width = frame_inner_rect().width() - m_size_occupied_by_fixed_elements.width() - width_occupied_by_vertical_scrollbar();
+    int available_height = frame_inner_rect().height() - m_size_occupied_by_fixed_elements.height() - height_occupied_by_horizontal_scrollbar();
     return { available_width, available_height };
 }
 
@@ -93,8 +102,8 @@ Rect GScrollableWidget::visible_content_rect() const
     return {
         m_horizontal_scrollbar->value(),
         m_vertical_scrollbar->value(),
-        width() - width_occupied_by_vertical_scrollbar() - m_size_occupied_by_fixed_elements.width(),
-        height() - height_occupied_by_horizontal_scrollbar() - m_size_occupied_by_fixed_elements.height()
+        min(m_content_size.width(), frame_inner_rect().width() - width_occupied_by_vertical_scrollbar() - m_size_occupied_by_fixed_elements.width()),
+        min(m_content_size.height(), frame_inner_rect().height() - height_occupied_by_horizontal_scrollbar() - m_size_occupied_by_fixed_elements.height())
     };
 }
 
@@ -143,4 +152,12 @@ void GScrollableWidget::scroll_to_top()
 void GScrollableWidget::scroll_to_bottom()
 {
     scroll_into_view({ 0, content_height(), 1, 1 }, Orientation::Vertical);
+}
+
+Rect GScrollableWidget::widget_inner_rect() const
+{
+    auto rect = frame_inner_rect();
+    rect.set_width(rect.width() - width_occupied_by_vertical_scrollbar());
+    rect.set_height(rect.height() - height_occupied_by_horizontal_scrollbar());
+    return rect;
 }

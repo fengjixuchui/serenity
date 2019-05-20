@@ -14,9 +14,13 @@ __BEGIN_DECLS
 
 extern char** environ;
 
+int fsync(int fd);
+void sysbeep();
+int systrace(pid_t);
 int gettid();
 int donate(int tid);
 int create_thread(int(*)(void*), void*);
+void exit_thread(int);
 int create_shared_buffer(pid_t peer_pid, int, void** buffer);
 void* get_shared_buffer(int shared_buffer_id);
 int release_shared_buffer(int shared_buffer_id);
@@ -27,6 +31,7 @@ inline int getpagesize() { return 4096; }
 pid_t fork();
 int execv(const char* path, char* const argv[]);
 int execve(const char* filename, char* const argv[], char* const envp[]);
+int execvpe(const char* filename, char* const argv[], char* const envp[]);
 int execvp(const char* filename, char* const argv[]);
 int execl(const char* filename, const char* arg, ...);
 void sync();
@@ -48,6 +53,7 @@ int setuid(uid_t);
 int setgid(gid_t);
 pid_t tcgetpgrp(int fd);
 int tcsetpgrp(int fd, pid_t pgid);
+int creat(const char* path, mode_t);
 int open(const char* path, int options, ...);
 ssize_t read(int fd, void* buf, size_t count);
 ssize_t write(int fd, const void* buf, size_t count);

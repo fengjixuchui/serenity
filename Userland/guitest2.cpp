@@ -8,7 +8,7 @@
 #include <time.h>
 #include <Kernel/Syscall.h>
 #include <SharedGraphics/GraphicsBitmap.h>
-#include <SharedGraphics/Painter.h>
+#include <LibGUI/GPainter.h>
 #include <LibGUI/GWindow.h>
 #include <LibGUI/GWidget.h>
 #include <LibGUI/GLabel.h>
@@ -22,6 +22,7 @@
 
 static GWindow* make_launcher_window();
 static GWindow* make_progress_window();
+static GWindow* make_frames_window();
 
 void handle_sigchld(int)
 {
@@ -43,6 +44,9 @@ int main(int argc, char** argv)
 
     auto* progress_window = make_progress_window();
     progress_window->show();
+
+    auto* frames_window = make_frames_window();
+    frames_window->show();
 
     return app.exec();
 }
@@ -99,8 +103,8 @@ GWindow* make_launcher_window()
 
     auto* textbox = new GTextBox(widget);
     textbox->set_relative_rect({ 5, 110, 90, 20 });
-    textbox->on_return_pressed = [window] (GTextBox& textbox) {
-        window->set_title(textbox.text());
+    textbox->on_return_pressed = [window, textbox] {
+        window->set_title(textbox->text());
     };
 
     auto* other_textbox = new GTextBox(widget);
@@ -146,6 +150,44 @@ static GWindow* make_progress_window()
 
     progress_bar->set_range(0, 100);
     progress_bar->set_value(25);
+
+    return window;
+}
+
+static GWindow* make_frames_window()
+{
+    auto* window = new GWindow;
+    window->set_title("GFrame styles test");
+    window->set_rect({ 100, 400, 240, 80 });
+
+    auto* widget = new GWidget;
+    widget->set_fill_with_background_color(true);
+    window->set_main_widget(widget);
+
+    widget->set_layout(make<GBoxLayout>(Orientation::Vertical));
+
+    widget->layout()->set_margins({ 8, 8, 8, 8 });
+    widget->layout()->set_spacing(8);
+
+    auto add_label = [widget] (const String& text, FrameShape shape, FrameShadow shadow) {
+        auto* label = new GLabel(text, widget);
+        label->set_size_policy(SizePolicy::Fill, SizePolicy::Fill);
+        label->set_frame_thickness(1);
+        label->set_frame_shape(shape);
+        label->set_frame_shadow(shadow);
+        if (shape == FrameShape::Container) {
+            label->set_frame_thickness(2);
+            label->set_fill_with_background_color(true);
+            label->set_background_color(Color::White);
+        }
+    };
+
+    add_label("Panel + Raised", FrameShape::Panel, FrameShadow::Raised);
+    add_label("Panel + Sunken", FrameShape::Panel, FrameShadow::Sunken);
+    add_label("Panel + Plain", FrameShape::Panel, FrameShadow::Plain);
+    add_label("Container + Raised", FrameShape::Container, FrameShadow::Raised);
+    add_label("Container + Sunken", FrameShape::Container, FrameShadow::Sunken);
+    add_label("Container + Plain", FrameShape::Container, FrameShadow::Plain);
 
     return window;
 }

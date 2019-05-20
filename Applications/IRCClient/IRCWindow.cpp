@@ -7,6 +7,7 @@
 #include <LibGUI/GTableView.h>
 #include <LibGUI/GTextEditor.h>
 #include <LibGUI/GTextBox.h>
+#include <LibGUI/GSplitter.h>
 
 IRCWindow::IRCWindow(IRCClient& client, void* owner, Type type, const String& name, GWidget* parent)
     : GWidget(parent)
@@ -18,8 +19,7 @@ IRCWindow::IRCWindow(IRCClient& client, void* owner, Type type, const String& na
     set_layout(make<GBoxLayout>(Orientation::Vertical));
 
     // Make a container for the log buffer view + (optional) member list.
-    GWidget* container = new GWidget(this);
-    container->set_layout(make<GBoxLayout>(Orientation::Horizontal));
+    auto* container = new GSplitter(Orientation::Horizontal, this);
 
     m_table_view = new GTableView(container);
     m_table_view->set_headers_visible(false);
@@ -37,18 +37,19 @@ IRCWindow::IRCWindow(IRCClient& client, void* owner, Type type, const String& na
         member_view->set_preferred_size({ 100, 0 });
         member_view->set_alternating_row_colors(false);
         member_view->set_model(channel().member_model());
+        member_view->set_activates_on_selection(true);
     }
 
     m_text_editor = new GTextEditor(GTextEditor::SingleLine, this);
     m_text_editor->set_size_policy(SizePolicy::Fill, SizePolicy::Fixed);
-    m_text_editor->set_preferred_size({ 0, 15 });
-    m_text_editor->on_return_pressed = [this] (GTextEditor& editor) {
+    m_text_editor->set_preferred_size({ 0, 19 });
+    m_text_editor->on_return_pressed = [this] {
         if (m_type == Channel)
-            m_client.handle_user_input_in_channel(m_name, editor.text());
+            m_client.handle_user_input_in_channel(m_name, m_text_editor->text());
         else if (m_type == Query)
-            m_client.handle_user_input_in_query(m_name, editor.text());
+            m_client.handle_user_input_in_query(m_name, m_text_editor->text());
         else if (m_type == Server)
-            m_client.handle_user_input_in_server(editor.text());
+            m_client.handle_user_input_in_server(m_text_editor->text());
         m_text_editor->clear();
     };
 

@@ -2,9 +2,12 @@
 
 #include <LibGUI/GMenuItem.h>
 #include <AK/Function.h>
+#include <AK/Retainable.h>
+#include <AK/Retained.h>
 #include <AK/Vector.h>
 
 class GAction;
+class Point;
 
 class GMenu {
 public:
@@ -15,13 +18,17 @@ public:
 
     GAction* action_at(int);
 
-    void add_action(Retained<GAction>&&);
+    void add_action(Retained<GAction>);
     void add_separator();
+
+    void popup(const Point& screen_position);
+    void dismiss();
 
     Function<void(unsigned)> on_item_activation;
 
 private:
     friend class GMenuBar;
+
     int menu_id() const { return m_menu_id; }
     int realize_menu();
     void unrealize_menu();

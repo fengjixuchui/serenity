@@ -20,7 +20,8 @@ enum KeyCode : byte {
     Key_Down,
     Key_PageUp,
     Key_PageDown,
-    Key_Shift,
+    Key_LeftShift,
+    Key_RightShift,
     Key_Control,
     Key_Alt,
     Key_CapsLock,
@@ -108,9 +109,12 @@ enum KeyCode : byte {
     Key_Tilde,
     Key_Backtick,
     Key_Logo,
+
+    Key_Shift = Key_LeftShift,
 };
 
 enum KeyModifier {
+    Mod_None = 0x00,
     Mod_Alt = 0x01,
     Mod_Ctrl = 0x02,
     Mod_Shift = 0x04,

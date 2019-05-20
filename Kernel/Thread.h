@@ -1,17 +1,21 @@
 #pragma once
 
 #include <Kernel/i386.h>
-#include <Kernel/TSS.h>
 #include <Kernel/KResult.h>
+#include <Kernel/LinearAddress.h>
+#include <Kernel/UnixTypes.h>
+#include <Kernel/VM/Region.h>
 #include <AK/AKString.h>
 #include <AK/InlineLinkedList.h>
+#include <AK/OwnPtr.h>
 #include <AK/RetainPtr.h>
 #include <AK/Vector.h>
 
 class Alarm;
+class FileDescriptor;
 class Process;
 class Region;
-class Socket;
+class Thread;
 
 enum class ShouldUnblockThread { No = 0, Yes };
 
@@ -19,8 +23,10 @@ struct SignalActionData {
     LinearAddress handler_or_sigaction;
     dword mask { 0 };
     int flags { 0 };
-    LinearAddress restorer;
 };
+
+extern InlineLinkedList<Thread>* g_runnable_threads;
+extern InlineLinkedList<Thread>* g_nonrunnable_threads;
 
 class Thread : public InlineLinkedListNode<Thread> {
     friend class Process;
@@ -33,6 +39,7 @@ public:
     static void finalize_dying_threads();
 
     static Vector<Thread*> all_threads();
+    static bool is_thread(void*);
 
     int tid() const { return m_tid; }
     int pid() const;
@@ -42,7 +49,7 @@ public:
 
     void finalize();
 
-    enum State {
+    enum State : byte {
         Invalid = 0,
         Runnable,
         Running,
@@ -75,7 +82,6 @@ public:
 
     dword frame_ptr() const { return m_tss.ebp; }
     dword stack_ptr() const { return m_tss.esp; }
-    dword stack_top() const { return m_tss.ss == 0x10 ? m_stack_top0 : m_stack_top3; }
 
     word selector() const { return m_far_ptr.selector; }
     TSS32& tss() { return m_tss; }
@@ -85,12 +91,13 @@ public:
 
     void sleep(dword ticks);
     void block(Thread::State);
+    void block(Thread::State, FileDescriptor&);
     void unblock();
 
-    void set_wakeup_time(dword t) { m_wakeup_time = t; }
-    dword wakeup_time() const { return m_wakeup_time; }
+    void set_wakeup_time(qword t) { m_wakeup_time = t; }
+    qword wakeup_time() const { return m_wakeup_time; }
     void snooze_until(Alarm&);
-    KResult wait_for_connect(Socket&);
+    KResult wait_for_connect(FileDescriptor&);
 
     const FarPtr& far_ptr() const { return m_far_ptr; }
 
@@ -98,11 +105,11 @@ public:
     void set_ticks_left(dword t) { m_ticks_left = t; }
     dword ticks_left() const { return m_ticks_left; }
 
-    dword kernel_stack_base() const { return (dword)m_kernel_stack; }
-    dword kernel_stack_for_signal_handler_base() const { return (dword)m_kernel_stack_for_signal_handler; }
+    dword kernel_stack_base() const { return m_kernel_stack_base; }
+    dword kernel_stack_for_signal_handler_base() const { return m_kernel_stack_for_signal_handler_region ? m_kernel_stack_for_signal_handler_region->laddr().get() : 0; }
 
     void set_selector(word s) { m_far_ptr.selector = s; }
-    void set_state(State s) { m_state = s; }
+    void set_state(State);
 
     void send_signal(byte signal, Process* sender);
 
@@ -111,11 +118,9 @@ public:
     bool has_unmasked_pending_signals() const;
     void terminate_due_to_signal(byte signal);
 
-    FPUState& fpu_state() { return m_fpu_state; }
+    FPUState& fpu_state() { return *m_fpu_state; }
     bool has_used_fpu() const { return m_has_used_fpu; }
     void set_has_used_fpu(bool b) { m_has_used_fpu = b; }
-
-    void set_blocked_socket(Socket* socket) { m_blocked_socket = socket; }
 
     void set_default_signal_dispositions();
     void push_value_on_stack(dword);
@@ -128,44 +133,60 @@ public:
     Thread* m_prev { nullptr };
     Thread* m_next { nullptr };
 
+    InlineLinkedList<Thread>* thread_list() { return m_thread_list; }
+    void set_thread_list(InlineLinkedList<Thread>*);
+
     template<typename Callback> static void for_each_in_state(State, Callback);
     template<typename Callback> static void for_each_living(Callback);
+    template<typename Callback> static void for_each_runnable(Callback);
+    template<typename Callback> static void for_each_nonrunnable(Callback);
     template<typename Callback> static void for_each(Callback);
+
+    static bool is_runnable_state(Thread::State state)
+    {
+        return state == Thread::State::Running || state == Thread::State::Runnable;
+    }
+
+    static InlineLinkedList<Thread>* thread_list_for_state(Thread::State state)
+    {
+        if (is_runnable_state(state))
+            return g_runnable_threads;
+        return g_nonrunnable_threads;
+    }
 
 private:
     Process& m_process;
     int m_tid { -1 };
     TSS32 m_tss;
-    TSS32 m_tss_to_resume_kernel;
+    OwnPtr<TSS32> m_tss_to_resume_kernel;
     FarPtr m_far_ptr;
     dword m_ticks { 0 };
     dword m_ticks_left { 0 };
-    dword m_stack_top0 { 0 };
-    dword m_stack_top3 { 0 };
-    dword m_wakeup_time { 0 };
+    qword m_wakeup_time { 0 };
     dword m_times_scheduled { 0 };
     dword m_pending_signals { 0 };
     dword m_signal_mask { 0 };
-    void* m_kernel_stack { nullptr };
-    void* m_kernel_stack_for_signal_handler { nullptr };
+    dword m_kernel_stack_base { 0 };
+    RetainPtr<Region> m_kernel_stack_region;
+    RetainPtr<Region> m_kernel_stack_for_signal_handler_region;
     pid_t m_waitee_pid { -1 };
-    int m_blocked_fd { -1 };
+    RetainPtr<FileDescriptor> m_blocked_descriptor;
     timeval m_select_timeout;
     SignalActionData m_signal_action_data[32];
-    RetainPtr<Socket> m_blocked_socket;
     Region* m_signal_stack_user_region { nullptr };
     Alarm* m_snoozing_alarm { nullptr };
     Vector<int> m_select_read_fds;
     Vector<int> m_select_write_fds;
     Vector<int> m_select_exceptional_fds;
+    FPUState* m_fpu_state { nullptr };
+    InlineLinkedList<Thread>* m_thread_list { nullptr };
     State m_state { Invalid };
-    FPUState m_fpu_state;
     bool m_select_has_timeout { false };
     bool m_has_used_fpu { false };
     bool m_was_interrupted_while_blocked { false };
 };
 
-extern InlineLinkedList<Thread>* g_threads;
+HashTable<Thread*>& thread_table();
 
 const char* to_string(Thread::State);
 
@@ -173,7 +194,7 @@ template<typename Callback>
 inline void Thread::for_each_in_state(State state, Callback callback)
 {
     ASSERT_INTERRUPTS_DISABLED();
-    for (auto* thread = g_threads->head(); thread;) {
+    for (auto* thread = thread_list_for_state(state)->head(); thread;) {
         auto* next_thread = thread->next();
         if (thread->state() == state)
             callback(*thread);
@@ -185,7 +206,13 @@ template<typename Callback>
 inline void Thread::for_each_living(Callback callback)
 {
     ASSERT_INTERRUPTS_DISABLED();
-    for (auto* thread = g_threads->head(); thread;) {
+    for (auto* thread = g_runnable_threads->head(); thread;) {
+        auto* next_thread = thread->next();
+        if (thread->state() != Thread::State::Dead && thread->state() != Thread::State::Dying)
+            callback(*thread);
+        thread = next_thread;
+    }
+    for (auto* thread = g_nonrunnable_threads->head(); thread;) {
         auto* next_thread = thread->next();
         if (thread->state() != Thread::State::Dead && thread->state() != Thread::State::Dying)
             callback(*thread);
@@ -197,7 +224,15 @@ template<typename Callback>
 inline void Thread::for_each(Callback callback)
 {
     ASSERT_INTERRUPTS_DISABLED();
-    for (auto* thread = g_threads->head(); thread;) {
+    for_each_runnable(callback);
+    for_each_nonrunnable(callback);
+}
+
+template<typename Callback>
+inline void Thread::for_each_runnable(Callback callback)
+{
+    ASSERT_INTERRUPTS_DISABLED();
+    for (auto* thread = g_runnable_threads->head(); thread;) {
         auto* next_thread = thread->next();
         if (callback(*thread) == IterationDecision::Abort)
             return;
@@ -205,3 +240,14 @@ inline void Thread::for_each(Callback callback)
     }
 }
 
+template<typename Callback>
+inline void Thread::for_each_nonrunnable(Callback callback)
+{
+    ASSERT_INTERRUPTS_DISABLED();
+    for (auto* thread = g_nonrunnable_threads->head(); thread;) {
+        auto* next_thread = thread->next();
+        if (callback(*thread) == IterationDecision::Abort)
+            return;
+        thread = next_thread;
+    }
+}

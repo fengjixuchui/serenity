@@ -1,4 +1,6 @@
 #include <time.h>
+#include <sys/time.h>
+#include <sys/times.h>
 #include <errno.h>
 #include <assert.h>
 #include <Kernel/Syscall.h>
@@ -16,7 +18,7 @@ time_t time(time_t* tloc)
     return tv.tv_sec;
 }
 
-int gettimeofday(struct timeval* tv, struct timezone*)
+int gettimeofday(struct timeval* __restrict__ tv, void* __restrict__)
 {
     int rc = syscall(SC_gettimeofday, tv);
     __RETURN_WITH_ERRNO(rc, rc, -1);
@@ -91,12 +93,12 @@ struct tm* gmtime(const time_t* t)
 
 char *asctime(const struct tm*)
 {
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 size_t strftime(char*, size_t, const char*, const struct tm*)
 {
-    assert(false);
+    ASSERT_NOT_REACHED();
 }
 
 long timezone;
@@ -106,7 +108,14 @@ int daylight;
 
 void tzset()
 {
-    assert(false);
+    ASSERT_NOT_REACHED();
+}
+
+clock_t clock()
+{
+    struct tms tms;
+    times(&tms);
+    return tms.tms_utime + tms.tms_stime;
 }
 
 }

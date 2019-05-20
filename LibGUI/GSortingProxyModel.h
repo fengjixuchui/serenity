@@ -7,14 +7,13 @@ public:
     static Retained<GSortingProxyModel> create(Retained<GModel>&& model) { return adopt(*new GSortingProxyModel(move(model))); }
     virtual ~GSortingProxyModel() override;
 
-    virtual int row_count() const override;
-    virtual int column_count() const override;
+    virtual int row_count(const GModelIndex& = GModelIndex()) const override;
+    virtual int column_count(const GModelIndex& = GModelIndex()) const override;
     virtual String row_name(int) const override;
     virtual String column_name(int) const override;
     virtual ColumnMetadata column_metadata(int) const override;
     virtual GVariant data(const GModelIndex&, Role = Role::Display) const override;
     virtual void update() override;
-    virtual void activate(const GModelIndex&) override;
 
     virtual int key_column() const override { return m_key_column; }
     virtual GSortOrder sort_order() const override { return m_sort_order; }

@@ -3,7 +3,10 @@
 #include <LibGUI/GScrollableWidget.h>
 #include <AK/Function.h>
 #include <AK/HashMap.h>
+#include <SharedGraphics/TextAlignment.h>
 
+class GAction;
+class GMenu;
 class GScrollBar;
 class Painter;
 
@@ -67,11 +70,24 @@ public:
     GTextEditor(Type, GWidget* parent);
     virtual ~GTextEditor() override;
 
+    bool is_readonly() const { return m_readonly; }
+    void set_readonly(bool);
+
+    bool is_automatic_indentation() const { return m_automatic_indentation_enabled; }
+    void set_automatic_indentation_enabled(bool enabled) { m_automatic_indentation_enabled = enabled; }
+
+    TextAlignment text_alignment() const { return m_text_alignment; }
+    void set_text_alignment(TextAlignment);
+
     Type type() const { return m_type; }
     bool is_single_line() const { return m_type == SingleLine; }
     bool is_multi_line() const { return m_type == MultiLine; }
 
-    Function<void(GTextEditor&)> on_cursor_change;
+    bool is_ruler_visible() const { return m_ruler_visible; }
+    void set_ruler_visible(bool b) { m_ruler_visible = b; }
+
+    Function<void()> on_cursor_change;
+    Function<void()> on_selection_change;
 
     void set_text(const String&);
     void scroll_cursor_into_view();
@@ -80,6 +96,7 @@ public:
     int line_height() const { return font().glyph_height() + m_line_spacing; }
     GTextPosition cursor() const { return m_cursor; }
     GTextRange normalized_selection() const { return m_selection.normalized(); }
+    // FIXME: This should take glyph spacing into account, no?
     int glyph_width() const { return font().glyph_width('x'); }
 
     bool write_to_file(const String& path);
@@ -96,28 +113,45 @@ public:
     void do_delete();
     void delete_current_line();
 
-    Function<void(GTextEditor&)> on_return_pressed;
-    Function<void(GTextEditor&)> on_escape_pressed;
+    Function<void()> on_change;
+    Function<void()> on_return_pressed;
+    Function<void()> on_escape_pressed;
 
     virtual const char* class_name() const override { return "GTextEditor"; }
+
+    GAction& undo_action() { return *m_undo_action; }
+    GAction& redo_action() { return *m_redo_action; }
+    GAction& cut_action() { return *m_cut_action; }
+    GAction& copy_action() { return *m_copy_action; }
+    GAction& paste_action() { return *m_paste_action; }
+    GAction& delete_action() { return *m_delete_action; }
 
 private:
     virtual void paint_event(GPaintEvent&) override;
     virtual void mousedown_event(GMouseEvent&) override;
     virtual void mouseup_event(GMouseEvent&) override;
     virtual void mousemove_event(GMouseEvent&) override;
+    virtual void doubleclick_event(GMouseEvent&) override;
     virtual void keydown_event(GKeyEvent&) override;
-    virtual void focusin_event(GEvent&) override;
-    virtual void focusout_event(GEvent&) override;
-    virtual void timer_event(GTimerEvent&) override;
+    virtual void focusin_event(CEvent&) override;
+    virtual void focusout_event(CEvent&) override;
+    virtual void timer_event(CTimerEvent&) override;
     virtual bool accepts_focus() const override { return true; }
+    virtual void enter_event(CEvent&) override;
+    virtual void leave_event(CEvent&) override;
+    virtual void context_menu_event(GContextMenuEvent&) override;
+    virtual void resize_event(GResizeEvent&) override;
+
+    void create_actions();
     void paint_ruler(Painter&);
     void update_content_size();
+    void did_change();
 
     class Line {
         friend class GTextEditor;
     public:
         Line();
+        explicit Line(const String&);
 
         const char* characters() const { return m_text.data(); }
         int length() const { return m_text.size() - 1; }
@@ -152,16 +186,30 @@ private:
     void toggle_selection_if_needed_for_event(const GKeyEvent&);
     void insert_at_cursor_or_replace_selection(const String&);
     void delete_selection();
+    void did_update_selection();
+    int content_x_for_position(const GTextPosition&) const;
 
     Type m_type { MultiLine };
 
     Vector<OwnPtr<Line>> m_lines;
     GTextPosition m_cursor;
+    TextAlignment m_text_alignment { TextAlignment::CenterLeft };
     bool m_cursor_state { true };
     bool m_in_drag_select { false };
-    bool m_ruler_visible { true };
+    bool m_ruler_visible { false };
+    bool m_have_pending_change_notification { false };
+    bool m_automatic_indentation_enabled { false };
+    bool m_readonly { false };
     int m_line_spacing { 4 };
     int m_soft_tab_width { 4 };
     int m_horizontal_content_padding { 2 };
     GTextRange m_selection;
+    OwnPtr<GMenu> m_context_menu;
+    RetainPtr<GAction> m_undo_action;
+    RetainPtr<GAction> m_redo_action;
+    RetainPtr<GAction> m_cut_action;
+    RetainPtr<GAction> m_copy_action;
+    RetainPtr<GAction> m_paste_action;
+    RetainPtr<GAction> m_delete_action;
+    CElapsedTimer m_triple_click_timer;
 };

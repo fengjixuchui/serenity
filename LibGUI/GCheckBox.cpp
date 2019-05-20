@@ -1,27 +1,28 @@
-#include "GCheckBox.h"
-#include <SharedGraphics/Painter.h>
+#include <LibGUI/GCheckBox.h>
+#include <LibGUI/GPainter.h>
 #include <SharedGraphics/CharacterBitmap.h>
+#include <SharedGraphics/StylePainter.h>
 #include <Kernel/KeyCode.h>
 
 //#define GCHECKBOX_DEBUG
 
 static const char* s_checked_bitmap_data = {
     "         "
+    "       # "
     "      ## "
-    "     ##  "
-    "     ##  "
-    "    ##   "
-    " ## ##   "
-    "  ####   "
-    "   ##    "
+    "     ### "
+    " ## ###  "
+    " #####   "
+    "  ###    "
+    "   #     "
     "         "
 };
 
 static CharacterBitmap* s_checked_bitmap;
 static const int s_checked_bitmap_width = 9;
 static const int s_checked_bitmap_height = 9;
-static const int s_box_width = 11;
-static const int s_box_height = 11;
+static const int s_box_width = 13;
+static const int s_box_height = 13;
 
 GCheckBox::GCheckBox(GWidget* parent)
     : GWidget(parent)
@@ -34,11 +35,11 @@ GCheckBox::~GCheckBox()
 {
 }
 
-void GCheckBox::set_caption(String&& caption)
+void GCheckBox::set_caption(const String& caption)
 {
     if (caption == m_caption)
         return;
-    m_caption = move(caption);
+    m_caption = caption;
     update();
 }
 
@@ -54,37 +55,38 @@ void GCheckBox::set_checked(bool b)
 
 void GCheckBox::paint_event(GPaintEvent& event)
 {
-    Painter painter(*this);
-    painter.set_clip_rect(event.rect());
+    GPainter painter(*this);
+    painter.add_clip_rect(event.rect());
 
     auto text_rect = rect();
     text_rect.set_left(s_box_width + 4);
+    text_rect.set_width(font().width(m_caption));
     text_rect.set_top(height() / 2 - font().glyph_height() / 2);
+    text_rect.set_height(font().glyph_height());
 
     if (fill_with_background_color())
         painter.fill_rect(rect(), background_color());
 
     Rect box_rect {
-        2, height() / 2 - s_box_height / 2 - 1,
+        0, height() / 2 - s_box_height / 2 - 1,
         s_box_width, s_box_height
     };
     painter.fill_rect(box_rect, Color::White);
-    painter.draw_rect(box_rect, Color::Black);
+    StylePainter::paint_frame(painter, box_rect, FrameShape::Container, FrameShadow::Sunken, 2);
 
     if (m_being_modified)
-        painter.draw_rect(box_rect.shrunken(2, 2), Color::MidGray);
+        painter.draw_rect(box_rect.shrunken(4, 4), Color::MidGray);
 
     if (m_checked)
-        painter.draw_bitmap(box_rect.shrunken(2, 2).location(), *s_checked_bitmap, foreground_color());
+        painter.draw_bitmap(box_rect.shrunken(4, 4).location(), *s_checked_bitmap, foreground_color());
 
-    if (!caption().is_empty())
+    if (!caption().is_empty()) {
         painter.draw_text(text_rect, caption(), TextAlignment::TopLeft, foreground_color());
-
-    if (is_focused()) {
-        // NOTE: Painter::draw_focus_rect() will shrink(2,2) the passed rect.
-        auto focus_rect = box_rect;
-        focus_rect.inflate(4, 4);
-        painter.draw_focus_rect(focus_rect);
+        if (is_focused()) {
+            Rect focus_rect = text_rect;
+            focus_rect.inflate(6, 4);
+            painter.draw_rect(focus_rect, Color(140, 140, 140));
+        }
     }
 }
 

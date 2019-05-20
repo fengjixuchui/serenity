@@ -95,6 +95,16 @@
     __ENUMERATE_SYSCALL(create_thread) \
     __ENUMERATE_SYSCALL(gettid) \
     __ENUMERATE_SYSCALL(donate) \
+    __ENUMERATE_SYSCALL(rename) \
+    __ENUMERATE_SYSCALL(shm_open) \
+    __ENUMERATE_SYSCALL(shm_close) \
+    __ENUMERATE_SYSCALL(ftruncate) \
+    __ENUMERATE_SYSCALL(systrace) \
+    __ENUMERATE_SYSCALL(exit_thread) \
+    __ENUMERATE_SYSCALL(mknod) \
+    __ENUMERATE_SYSCALL(writev) \
+    __ENUMERATE_SYSCALL(beep) \
+    __ENUMERATE_SYSCALL(getsockname) \
 
 
 namespace Syscall {
@@ -117,7 +127,7 @@ inline constexpr const char* to_string(Function function)
     return "Unknown";
 }
 
-#ifdef SERENITY
+#ifdef __serenity__
 struct SC_mmap_params {
     uint32_t addr;
     uint32_t size;
@@ -125,6 +135,7 @@ struct SC_mmap_params {
     int32_t flags;
     int32_t fd;
     int32_t offset; // FIXME: 64-bit off_t?
+    const char* name { nullptr };
 };
 
 struct SC_select_params {

@@ -5,11 +5,6 @@
 
 __BEGIN_DECLS
 
-struct timezone {
-    int tz_minuteswest;
-    int tz_dsttime;
-};
-
 struct tm {
     int tm_sec;    /* Seconds (0-60) */
     int tm_min;    /* Minutes (0-59) */
@@ -27,7 +22,9 @@ extern long altzone;
 extern char* tzname[2];
 extern int daylight;
 
-int gettimeofday(struct timeval*, struct timezone* tz);
+typedef uint32_t clock_t;
+typedef uint32_t time_t;
+
 struct tm* localtime(const time_t*);
 struct tm *gmtime(const time_t*);
 time_t mktime(struct tm*);
@@ -35,11 +32,20 @@ time_t time(time_t*);
 char* ctime(const time_t*);
 void tzset();
 char *asctime(const struct tm*);
+
+#define CLOCKS_PER_SEC 1000
 clock_t clock();
+
 double difftime(time_t, time_t);
 size_t strftime(char* s, size_t max, const char* format, const struct tm*);
 
 #define difftime(t1,t0) (double)(t1 - t0)
+
+// This is c++11+, but we have no macro for that now.
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
 
 __END_DECLS
 

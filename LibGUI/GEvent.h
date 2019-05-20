@@ -1,32 +1,30 @@
 #pragma once
 
+#include <LibCore/CEvent.h>
 #include <SharedGraphics/Point.h>
 #include <SharedGraphics/Rect.h>
-#include <AK/AKString.h>
-#include <AK/Types.h>
-#include <AK/WeakPtr.h>
 #include <Kernel/KeyCode.h>
+#include <LibGUI/GWindowType.h>
 
-class GObject;
+class CObject;
 
-class GEvent {
+class GEvent : public CEvent{
 public:
     enum Type {
-        Invalid = 0,
-        Quit,
-        Show,
+        Show = 1000,
         Hide,
         Paint,
+        MultiPaint,
         Resize,
         MouseMove,
         MouseDown,
+        MouseDoubleClick,
         MouseUp,
+        MouseWheel,
         Enter,
         Leave,
         KeyDown,
         KeyUp,
-        Timer,
-        DeferredDestroy,
         WindowEntered,
         WindowLeft,
         WindowBecameInactive,
@@ -34,30 +32,118 @@ public:
         FocusIn,
         FocusOut,
         WindowCloseRequest,
-        ChildAdded,
-        ChildRemoved,
+        ContextMenu,
+
+        __Begin_WM_Events,
+        WM_WindowRemoved,
+        WM_WindowStateChanged,
+        WM_WindowRectChanged,
+        WM_WindowIconChanged,
+        __End_WM_Events,
     };
 
     GEvent() { }
-    explicit GEvent(Type type) : m_type(type) { }
+    explicit GEvent(Type type) : CEvent(type) { }
     virtual ~GEvent() { }
 
-    Type type() const { return m_type; }
-
-    bool is_mouse_event() const { return m_type == MouseMove || m_type == MouseDown || m_type == MouseUp; }
-    bool is_key_event() const { return m_type == KeyUp || m_type == KeyDown; }
-    bool is_paint_event() const { return m_type == Paint; }
-
-private:
-    Type m_type { Invalid };
+    bool is_key_event() const { return type() == KeyUp || type() == KeyDown; }
+    bool is_paint_event() const { return type() == Paint; }
 };
 
-class QuitEvent final : public GEvent {
+class GWMEvent : public GEvent {
 public:
-    QuitEvent()
-        : GEvent(GEvent::Quit)
+    GWMEvent(Type type, int client_id, int window_id)
+        : GEvent(type)
+        , m_client_id(client_id)
+        , m_window_id(window_id)
     {
     }
+
+    int client_id() const { return m_client_id; }
+    int window_id() const { return m_window_id; }
+
+private:
+    int m_client_id { -1 };
+    int m_window_id { -1 };
+};
+
+class GWMWindowRemovedEvent : public GWMEvent {
+public:
+    GWMWindowRemovedEvent(int client_id, int window_id)
+        : GWMEvent(GEvent::Type::WM_WindowRemoved, client_id, window_id)
+    {
+    }
+};
+
+class GWMWindowStateChangedEvent : public GWMEvent {
+public:
+    GWMWindowStateChangedEvent(int client_id, int window_id, const String& title, const Rect& rect, bool is_active, GWindowType window_type, bool is_minimized)
+        : GWMEvent(GEvent::Type::WM_WindowStateChanged, client_id, window_id)
+        , m_title(title)
+        , m_rect(rect)
+        , m_window_type(window_type)
+        , m_active(is_active)
+        , m_minimized(is_minimized)
+    {
+    }
+
+    String title() const { return m_title; }
+    Rect rect() const { return m_rect; }
+    bool is_active() const { return m_active; }
+    GWindowType window_type() const { return m_window_type; }
+    bool is_minimized() const { return m_minimized; }
+
+private:
+    String m_title;
+    Rect m_rect;
+    GWindowType m_window_type;
+    bool m_active;
+    bool m_minimized;
+};
+
+class GWMWindowRectChangedEvent : public GWMEvent {
+public:
+    GWMWindowRectChangedEvent(int client_id, int window_id, const Rect& rect)
+        : GWMEvent(GEvent::Type::WM_WindowRectChanged, client_id, window_id)
+        , m_rect(rect)
+    {
+    }
+
+    Rect rect() const { return m_rect; }
+
+private:
+    Rect m_rect;
+};
+
+class GWMWindowIconChangedEvent : public GWMEvent {
+public:
+    GWMWindowIconChangedEvent(int client_id, int window_id, const String& icon_path)
+        : GWMEvent(GEvent::Type::WM_WindowIconChanged, client_id, window_id)
+        , m_icon_path(icon_path)
+    {
+    }
+
+    String icon_path() const { return m_icon_path; }
+
+private:
+    String m_icon_path;
+};
+
+class GMultiPaintEvent final : public GEvent {
+public:
+    explicit GMultiPaintEvent(const Vector<Rect, 32>& rects, const Size& window_size)
+        : GEvent(GEvent::MultiPaint)
+        , m_rects(rects)
+        , m_window_size(window_size)
+    {
+    }
+
+    const Vector<Rect, 32>& rects() const { return m_rects; }
+    Size window_size() const { return m_window_size; }
+
+private:
+    Vector<Rect, 32> m_rects;
+    Size m_window_size;
 };
 
 class GPaintEvent final : public GEvent {
@@ -91,6 +177,23 @@ public:
 private:
     Size m_old_size;
     Size m_size;
+};
+
+class GContextMenuEvent final : public GEvent {
+public:
+    explicit GContextMenuEvent(const Point& position, const Point& screen_position)
+        : GEvent(GEvent::ContextMenu)
+        , m_position(position)
+        , m_screen_position(screen_position)
+    {
+    }
+
+    const Point& position() const { return m_position; }
+    const Point& screen_position() const { return m_screen_position; }
+
+private:
+    Point m_position;
+    Point m_screen_position;
 };
 
 class GShowEvent final : public GEvent {
@@ -142,12 +245,13 @@ private:
 
 class GMouseEvent final : public GEvent {
 public:
-    GMouseEvent(Type type, const Point& position, unsigned buttons, GMouseButton button, unsigned modifiers)
+    GMouseEvent(Type type, const Point& position, unsigned buttons, GMouseButton button, unsigned modifiers, int wheel_delta)
         : GEvent(type)
         , m_position(position)
         , m_buttons(buttons)
         , m_button(button)
         , m_modifiers(modifiers)
+        , m_wheel_delta(wheel_delta)
     {
     }
 
@@ -157,33 +261,12 @@ public:
     GMouseButton button() const { return m_button; }
     unsigned buttons() const { return m_buttons; }
     unsigned modifiers() const { return m_modifiers; }
+    int wheel_delta() const { return m_wheel_delta; }
 
 private:
     Point m_position;
     unsigned m_buttons { 0 };
     GMouseButton m_button { GMouseButton::None };
     unsigned m_modifiers { 0 };
-};
-
-class GTimerEvent final : public GEvent {
-public:
-    explicit GTimerEvent(int timer_id) : GEvent(GEvent::Timer), m_timer_id(timer_id) { }
-    ~GTimerEvent() { }
-
-    int timer_id() const { return m_timer_id; }
-
-private:
-    int m_timer_id;
-};
-
-class GChildEvent final : public GEvent {
-public:
-    GChildEvent(Type, GObject& child);
-    ~GChildEvent();
-
-    GObject* child() { return m_child.ptr(); }
-    const GObject* child() const { return m_child.ptr(); }
-
-private:
-    WeakPtr<GObject> m_child;
+    int m_wheel_delta { 0 };
 };
